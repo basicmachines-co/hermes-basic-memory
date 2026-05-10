@@ -2,67 +2,83 @@
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-Hermes Memory Provider plugin that wraps the [basic-memory](https://github.com/basicmachines-co/basic-memory) MCP server. Analog of [openclaw-basic-memory](https://github.com/basicmachines-co/openclaw-basic-memory) for Hermes Agent.
+Hermes Memory Provider plugin that gives [Hermes Agent](https://github.com/NousResearch/hermes-agent) a persistent knowledge graph backed by [Basic Memory](https://github.com/basicmachines-co/basic-memory).
 
-## What it does
-
-Replaces Hermes's "no external provider" memory with a Basic Memory knowledge graph:
-
-- 7 agent tools: `bm_search`, `bm_read`, `bm_write`, `bm_edit`, `bm_context`, `bm_delete`, `bm_move`
-- Per-turn capture: appends each user/assistant turn to a running session note
-- Session-end summary: writes a separate summary note with relations back to the transcript
-- Pre-turn recall: `prefetch(query)` runs a hybrid search and injects results as `<memory-context>`
-- Local mode (default) writes to `~/.basic-memory/hermes/`; cloud mode writes to a Basic Memory Cloud project
+The plugin replaces Hermes's "no external memory provider" with a real graph: search-before-answer recall, per-turn capture, end-of-session summaries, and seven `bm_*` tools the agent can call directly. Local mode by default; one CLI flip switches to true cloud routing through Basic Memory Cloud.
 
 ## Install
 
-**Prerequisites**
-
-- [Hermes Agent](https://github.com/NousResearch/hermes-agent)
-- [`uv`](https://docs.astral.sh/uv/) — used to bootstrap-install `basic-memory` if it isn't already on the host
-- The `mcp` Python package in the Hermes venv (one-shot: `uv pip install --python ~/.hermes/hermes-agent/venv/bin/python mcp`)
-
-You do **not** need to pre-install the `basic-memory` CLI. If `bm` isn't on the host when the plugin first initializes, the plugin runs `uv tool install basic-memory` once, putting `bm` at `~/.local/bin/bm`. The install is idempotent — running `uv tool install basic-memory` later (or `uv tool upgrade basic-memory`) converges on the same uv-managed install, so there's no two-installations-sharing-one-config-dir foot-gun.
-
-If you'd rather control the install yourself, just run `uv tool install basic-memory` (or `pip install basic-memory`) ahead of time and the plugin will skip the bootstrap.
-
-**Deploy the plugin**
-
 ```bash
-mkdir -p ~/.hermes/plugins ~/.hermes/skills
-ln -snf ~/code/hermes-basic-memory ~/.hermes/plugins/basic-memory
-ln -snf ~/code/hermes-basic-memory/skill ~/.hermes/skills/basic-memory
+hermes plugins install basicmachines-co/hermes-basic-memory
 ```
 
-Activate it in `~/.hermes/config.yaml`:
+Then activate it in `~/.hermes/config.yaml`:
 
 ```yaml
 memory:
   provider: basic-memory
 ```
 
-Verify:
+If you run the gateway, restart it (`hermes gateway restart`). Done.
+
+The plugin self-installs the `basic-memory` CLI on first init via `uv tool install basic-memory` (one-time ~10s pause if it isn't already present). The bm binary lands at `~/.local/bin/bm` — the same location a manual `uv tool install basic-memory` would produce, so a later manual install or upgrade is a no-op rather than a second install.
+
+### Prerequisites
+
+- [Hermes Agent](https://github.com/NousResearch/hermes-agent)
+- [`uv`](https://docs.astral.sh/uv/) on PATH (used for the bootstrap install)
+- The `mcp` Python package in the Hermes venv. If `hermes plugins install` doesn't auto-install it (it follows `pip_dependencies` in `plugin.yaml`), run:
+  ```bash
+  uv pip install --python ~/.hermes/hermes-agent/venv/bin/python mcp
+  ```
+
+### Verify
 
 ```bash
 hermes memory status
 ```
 
-First time the plugin initializes (gateway start or `hermes -z`), expect a one-time pause of ~10s while `uv tool install basic-memory` runs. Subsequent inits are instant.
+Expected:
+```
+  Provider:  basic-memory
+  Plugin:    installed ✓
+  Status:    available ✓
+```
+
+## What the agent gets
+
+Seven tools (curated subset of Basic Memory's MCP surface):
+
+| Tool | Use |
+|---|---|
+| `bm_search` | Semantic + full-text search; **call this before answering** |
+| `bm_read` | Fetch a note by title, permalink, or `memory://` URL |
+| `bm_write` | Create a new note (capture decisions, meeting notes, insights) |
+| `bm_edit` | Append, prepend, find/replace, replace-section |
+| `bm_context` | Navigate via `memory://` URLs to find related notes |
+| `bm_delete` | Delete a note |
+| `bm_move` | Move a note to a different folder |
+
+Plus automatic capture:
+- **Per turn**: every user/assistant exchange appends to a running session-transcript note
+- **End of session**: a separate summary note is written, linked back to the transcript via a `summary_of` relation
+
+A bundled skill (`skill:view basic-memory:basic-memory`) gives the agent a longer reference doc on top of the always-on `system_prompt_block`.
 
 ## Configuration
 
 Defaults are reasonable for local use:
 
-| Key | Default |
-|---|---|
-| `mode` | `local` |
-| `project` | `hermes-memory` |
-| `project_path` | `~/hermes-memory/` |
-| `capture_folder` | `hermes-sessions` |
-| `capture_per_turn` | `true` |
-| `capture_session_end` | `true` |
+| Key | Default | Notes |
+|---|---|---|
+| `mode` | `local` | `local` (in-process) or `cloud` (route through BM Cloud API) |
+| `project` | `hermes-memory` | BM project name |
+| `project_path` | `~/hermes-memory/` | Local mode only — where session notes land |
+| `capture_folder` | `hermes-sessions` | Folder within the project for session notes |
+| `capture_per_turn` | `true` | Append every turn to a session transcript |
+| `capture_session_end` | `true` | Write a summary note when the session ends |
 
-To override, write `~/.hermes/basic-memory.json` (or run `hermes memory setup basic-memory` for the wizard):
+To override, write `~/.hermes/basic-memory.json` or run `hermes memory setup basic-memory`:
 
 ```json
 {
@@ -85,8 +101,8 @@ When `mode: cloud`, tool calls route directly through the BM cloud API — no lo
 # Authenticate (OAuth) or save an API key
 bm cloud login                     # OAuth — interactive
 # OR for headless/automation:
-bm cloud create-key "hermes"       # creates a new API key
-bm cloud set-key bmc_...           # saves the key
+bm cloud create-key "hermes"
+bm cloud set-key bmc_...
 
 # Create the project, then flip it to cloud routing.
 # --workspace is required if you belong to more than one workspace
@@ -105,24 +121,38 @@ cat > ~/.hermes/basic-memory.json <<EOF
 }
 EOF
 
-hermes gateway restart   # if you're using the gateway
+hermes gateway restart
 ```
 
 Tool calls now route from `bm mcp` → `<cloud_host>/proxy` over HTTPS using your OAuth token (or API key). Notes never touch local disk.
 
-**Don't confuse this with `bm cloud bisync`.** Bisync is rclone-style two-way file sync between a *local* project and cloud storage, intended for keeping local working copies. For agent-driven capture you want true cloud routing (`set-cloud`), not bisync.
+**Don't confuse cloud mode with `bm cloud bisync`.** Bisync is rclone-style two-way file sync between a *local* project and cloud storage, intended for keeping local working copies. For agent-driven capture you want true cloud routing (`set-cloud`), not bisync.
+
+## Updating / removing
+
+```bash
+hermes plugins update basic-memory
+hermes plugins remove basic-memory     # then revert memory.provider in config.yaml
+```
 
 ## Foot-guns
 
-- **`<memory-context>` tags in BM notes**: Hermes's streaming output scrubber strips literal `<memory-context>...</memory-context>` blocks from assistant text. If a note contains those tags and the assistant echoes the note body verbatim, the echoed copy gets eaten mid-stream. Tool results inbound are unaffected. Avoid putting those tags in BM notes; if you must, fence them in code blocks.
+- **`<memory-context>` tags in notes**: Hermes's streaming output scrubber strips literal `<memory-context>...</memory-context>` blocks from assistant text. If a note contains those tags and the assistant echoes the body verbatim, the echoed copy gets eaten mid-stream. Tool results inbound are unaffected. Avoid those tags in BM notes; if you must include them, fence in a code block.
 - **Single external provider**: Hermes accepts only one external memory provider at a time. Activating basic-memory displaces any other.
-- **CLI cold start**: `hermes ask ...` invocations spawn `bm mcp` on every run (~2-5s). Long-running gateway sessions amortize this.
+- **CLI cold start**: `hermes -z ...` invocations spawn `bm mcp` per run (~2-5s). Long-running gateway sessions amortize this.
+- **Multiple cloud workspaces**: if your BM Cloud account belongs to more than one workspace, `bm project set-cloud` must be invoked with `--workspace <name>`. Otherwise tool calls fail with "Multiple workspaces are available".
 
 ## Development
 
 The plugin is a single-file Python module at `__init__.py`. The Hermes plugin loader expects `register(ctx)` and grep-detects either `register_memory_provider` or `MemoryProvider` in the file.
 
-The repo dir is the deployable package — symlink it directly into `~/.hermes/plugins/basic-memory`.
+For local development (point Hermes at your working tree instead of going through `hermes plugins install`):
+
+```bash
+git clone https://github.com/basicmachines-co/hermes-basic-memory ~/code/hermes-basic-memory
+mkdir -p ~/.hermes/plugins
+ln -snf ~/code/hermes-basic-memory ~/.hermes/plugins/basic-memory
+```
 
 ### Running tests
 
@@ -134,14 +164,9 @@ uv run --with pytest pytest
 BM_INTEGRATION=1 uv run --with pytest --with mcp pytest tests/test_integration.py
 ```
 
-The unit suite stubs out Hermes-internal imports (`agent.memory_provider`, `tools.registry`) so it runs without a Hermes install. `mcp` is optional at unit-test time — its absence just makes `is_available()` return `False`, which the tests verify.
+The unit suite stubs out Hermes-internal imports (`agent.memory_provider`, `tools.registry`) so it runs without a Hermes install. `mcp` is optional at unit-test time — its absence just makes `is_available()` return False, which the tests verify.
 
-Integration tests require:
-- `BM_INTEGRATION=1` (env var gate)
-- `bm` CLI on PATH
-- `mcp` Python package importable (`uv run --with mcp ...`)
-
-Each integration session creates a unique throwaway BM project (under `tempfile.mkdtemp`) and removes it on teardown, so they never touch your real BM projects.
+Integration tests require `BM_INTEGRATION=1`, `bm` CLI on PATH, and `mcp` Python package importable. Each session creates a unique throwaway BM project (under `tempfile.mkdtemp`) and removes it on teardown, so they never touch your real BM projects.
 
 ## License
 

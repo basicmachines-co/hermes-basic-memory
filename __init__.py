@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from agent.memory_provider import MemoryProvider
 from tools.registry import tool_error
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"
 
 logger = logging.getLogger("hermes.memory.basic-memory")
 
@@ -1128,3 +1128,23 @@ def register(ctx: Any) -> None:
     provider = BasicMemoryProvider()
     _active_providers.append(provider)
     ctx.register_memory_provider(provider)
+
+    # Bundle the user-facing skill so `hermes plugins install` wires it up
+    # with the rest of the plugin. The skill is opt-in via
+    # `skill:view basic-memory:basic-memory` — it's not in the auto-loaded
+    # `<available_skills>` index. Always-on agent guidance still flows
+    # through `system_prompt_block()`.
+    skill_path = Path(__file__).resolve().parent / "skill" / "SKILL.md"
+    if skill_path.exists() and hasattr(ctx, "register_skill"):
+        try:
+            ctx.register_skill(
+                "basic-memory",
+                skill_path,
+                description=(
+                    "Reference for using bm_* tools and the Basic Memory "
+                    "knowledge graph (search-before-answer, capture decisions, "
+                    "navigate via memory:// URLs)."
+                ),
+            )
+        except Exception as e:
+            logger.warning("basic-memory: register_skill failed: %s", e)

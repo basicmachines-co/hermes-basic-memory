@@ -222,6 +222,51 @@ def test_register_appends_to_active_providers(bm):
     bm._active_providers.clear()
 
 
+def test_register_also_registers_bundled_skill(bm):
+    """Plugin's bundled SKILL.md should auto-register when `hermes plugins install`
+    drops the repo into ~/.hermes/plugins/. Avoids the manual symlink step."""
+    fake_ctx = MagicMock()
+    bm._active_providers.clear()
+    bm.register(fake_ctx)
+    fake_ctx.register_skill.assert_called_once()
+    args, kwargs = fake_ctx.register_skill.call_args
+    # First positional arg is the bare skill name
+    assert args[0] == "basic-memory"
+    # Second positional arg is the SKILL.md path; it should resolve to a real file
+    assert args[1].name == "SKILL.md"
+    assert args[1].is_file()
+    bm._active_providers.clear()
+
+
+def test_register_tolerates_old_hermes_without_register_skill(bm):
+    """Older Hermes versions don't have ctx.register_skill; we shouldn't crash."""
+    class _OldCtx:
+        def __init__(self):
+            self.calls = []
+
+        def register_memory_provider(self, provider):
+            self.calls.append(("memory", provider))
+
+    ctx = _OldCtx()
+    bm._active_providers.clear()
+    bm.register(ctx)  # must not raise
+    assert any(c[0] == "memory" for c in ctx.calls)
+    bm._active_providers.clear()
+
+
+def test_register_swallows_register_skill_errors(bm, caplog):
+    """If register_skill raises (path validation, ABC mismatch, etc.) we log
+    and continue — don't break the memory-provider registration."""
+    fake_ctx = MagicMock()
+    fake_ctx.register_skill.side_effect = ValueError("invalid skill name")
+    bm._active_providers.clear()
+    with caplog.at_level("WARNING"):
+        bm.register(fake_ctx)
+    fake_ctx.register_memory_provider.assert_called_once()
+    assert "register_skill failed" in caplog.text
+    bm._active_providers.clear()
+
+
 # ---- Edge cases ----
 
 def test_handle_tool_call_with_none_args(bm):
