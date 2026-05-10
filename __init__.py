@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from agent.memory_provider import MemoryProvider
 from tools.registry import tool_error
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 
 logger = logging.getLogger("hermes.memory.basic-memory")
 
@@ -193,6 +193,55 @@ def _bm_binary_path() -> Optional[str]:
         if os.path.isfile(c) and os.access(c, os.X_OK):
             return c
     return which("bm")
+
+
+def _uv_binary_path() -> Optional[str]:
+    """Find the uv CLI. Used to bootstrap-install basic-memory when bm is missing."""
+    candidates = [
+        os.path.expanduser("~/.local/bin/uv"),
+        "/opt/homebrew/bin/uv",
+        "/usr/local/bin/uv",
+    ]
+    for c in candidates:
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return which("uv")
+
+
+def _install_bm_via_uv(timeout: float = 180.0) -> Optional[str]:
+    """
+    Bootstrap-install basic-memory via `uv tool install`.
+
+    Idempotent — re-runs are no-ops when the tool is already installed, so this
+    converges with later manual `uv tool install basic-memory` calls and avoids
+    the two-installations-sharing-one-config-dir foot-gun.
+
+    Returns the resolved bm path on success, or None if uv is unavailable or
+    the install failed.
+    """
+    uv = _uv_binary_path()
+    if not uv:
+        return None
+    try:
+        result = subprocess.run(
+            [uv, "tool", "install", "basic-memory", "--quiet"],
+            check=False,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except Exception as e:
+        logger.warning("basic-memory: `uv tool install basic-memory` failed: %s", e)
+        return None
+    if result.returncode != 0:
+        # uv prints to stderr; capture the tail so the operator can debug.
+        stderr_tail = (result.stderr or b"").decode("utf-8", errors="replace")[-400:]
+        logger.warning(
+            "basic-memory: `uv tool install basic-memory` exited %s: %s",
+            result.returncode,
+            stderr_tail.strip(),
+        )
+        return None
+    return _bm_binary_path()
 
 
 def _hostname() -> str:
@@ -577,11 +626,15 @@ class BasicMemoryProvider(MemoryProvider):
 
     def is_available(self) -> bool:
         # Discovery hot path. NEVER make network calls or spawn subprocesses here.
+        # We report available when either bm is present already OR uv is present
+        # (we bootstrap-install bm via `uv tool install` at initialize() time).
         if not _MCP_AVAILABLE:
             return False
-        if not _bm_binary_path():
-            return False
-        return True
+        if _bm_binary_path():
+            return True
+        if _uv_binary_path():
+            return True
+        return False
 
     # ---- Lifecycle ----
     def initialize(self, session_id: str, **kwargs: Any) -> None:
@@ -596,6 +649,28 @@ class BasicMemoryProvider(MemoryProvider):
         self._capture_per_turn = bool(_coerce_bool(cfg.get("capture_per_turn", True)))
         self._capture_session_end = bool(_coerce_bool(cfg.get("capture_session_end", True)))
         self._capture_folder = cfg.get("capture_folder") or "hermes-sessions"
+
+        # Bootstrap-install bm via uv if it's not already on disk. One-time cost
+        # on a fresh machine; idempotent no-op once basic-memory is installed.
+        if not _bm_binary_path():
+            if _uv_binary_path() is None:
+                logger.error(
+                    "basic-memory: bm CLI not found and uv is not installed. "
+                    "Install uv (https://docs.astral.sh/uv/) or run "
+                    "`pip install basic-memory` manually. Provider will not initialize."
+                )
+                return
+            logger.info(
+                "basic-memory: bm CLI not found — installing basic-memory via "
+                "`uv tool install` (one-time bootstrap)"
+            )
+            if _install_bm_via_uv() is None:
+                logger.error(
+                    "basic-memory: auto-install via uv failed. Run "
+                    "`uv tool install basic-memory` manually to debug. "
+                    "Provider will not initialize."
+                )
+                return
 
         if self._mode == "local":
             self._ensure_local_project()

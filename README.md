@@ -16,18 +16,22 @@ Replaces Hermes's "no external provider" memory with a Basic Memory knowledge gr
 
 ## Install
 
-Symlink into the Hermes plugins directory (creates the dir if missing):
+**Prerequisites**
+
+- [Hermes Agent](https://github.com/NousResearch/hermes-agent)
+- [`uv`](https://docs.astral.sh/uv/) — used to bootstrap-install `basic-memory` if it isn't already on the host
+- The `mcp` Python package in the Hermes venv (one-shot: `uv pip install --python ~/.hermes/hermes-agent/venv/bin/python mcp`)
+
+You do **not** need to pre-install the `basic-memory` CLI. If `bm` isn't on the host when the plugin first initializes, the plugin runs `uv tool install basic-memory` once, putting `bm` at `~/.local/bin/bm`. The install is idempotent — running `uv tool install basic-memory` later (or `uv tool upgrade basic-memory`) converges on the same uv-managed install, so there's no two-installations-sharing-one-config-dir foot-gun.
+
+If you'd rather control the install yourself, just run `uv tool install basic-memory` (or `pip install basic-memory`) ahead of time and the plugin will skip the bootstrap.
+
+**Deploy the plugin**
 
 ```bash
 mkdir -p ~/.hermes/plugins ~/.hermes/skills
 ln -snf ~/code/hermes-basic-memory ~/.hermes/plugins/basic-memory
 ln -snf ~/code/hermes-basic-memory/skill ~/.hermes/skills/basic-memory
-```
-
-Install the MCP client SDK into the Hermes venv:
-
-```bash
-uv pip install --python ~/.hermes/hermes-agent/venv/bin/python mcp
 ```
 
 Activate it in `~/.hermes/config.yaml`:
@@ -42,6 +46,8 @@ Verify:
 ```bash
 hermes memory status
 ```
+
+First time the plugin initializes (gateway start or `hermes -z`), expect a one-time pause of ~10s while `uv tool install basic-memory` runs. Subsequent inits are instant.
 
 ## Configuration
 

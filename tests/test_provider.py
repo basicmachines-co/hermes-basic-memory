@@ -12,16 +12,29 @@ def test_is_available_no_mcp(bm, monkeypatch):
     assert p.is_available() is False
 
 
-def test_is_available_no_bm_binary(bm, monkeypatch):
+def test_is_available_no_bm_no_uv(bm, monkeypatch):
+    """No bm AND no uv → can't install, can't operate → unavailable."""
     monkeypatch.setattr(bm, "_MCP_AVAILABLE", True)
     monkeypatch.setattr(bm, "_bm_binary_path", lambda: None)
+    monkeypatch.setattr(bm, "_uv_binary_path", lambda: None)
     p = bm.BasicMemoryProvider()
     assert p.is_available() is False
 
 
-def test_is_available_happy(bm, monkeypatch):
+def test_is_available_bm_present(bm, monkeypatch):
+    """bm already installed → available regardless of uv."""
     monkeypatch.setattr(bm, "_MCP_AVAILABLE", True)
     monkeypatch.setattr(bm, "_bm_binary_path", lambda: "/fake/bm")
+    monkeypatch.setattr(bm, "_uv_binary_path", lambda: None)
+    p = bm.BasicMemoryProvider()
+    assert p.is_available() is True
+
+
+def test_is_available_bm_missing_but_uv_present(bm, monkeypatch):
+    """bm missing but uv available → we can install bm at init time → available."""
+    monkeypatch.setattr(bm, "_MCP_AVAILABLE", True)
+    monkeypatch.setattr(bm, "_bm_binary_path", lambda: None)
+    monkeypatch.setattr(bm, "_uv_binary_path", lambda: "/fake/uv")
     p = bm.BasicMemoryProvider()
     assert p.is_available() is True
 
@@ -259,6 +272,123 @@ def test_module_version_matches_plugin_yaml(bm):
     assert m.group(1) == bm.__version__, (
         f"plugin.yaml version ({m.group(1)}) doesn't match __version__ ({bm.__version__})"
     )
+
+
+# ---- uv bootstrap ----
+
+def test_install_bm_via_uv_no_uv(bm, monkeypatch):
+    """If uv isn't available, install returns None without trying to spawn."""
+    monkeypatch.setattr(bm, "_uv_binary_path", lambda: None)
+    assert bm._install_bm_via_uv() is None
+
+
+def test_install_bm_via_uv_runs_uv_tool_install(bm, monkeypatch):
+    """Install shells out to `uv tool install basic-memory`."""
+    calls: list = []
+
+    class _Result:
+        returncode = 0
+        stdout = b""
+        stderr = b""
+
+    def _fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return _Result()
+
+    monkeypatch.setattr(bm, "_uv_binary_path", lambda: "/fake/uv")
+    monkeypatch.setattr(bm.subprocess, "run", _fake_run)
+    monkeypatch.setattr(bm, "_bm_binary_path", lambda: "/fake/bm-after-install")
+
+    result = bm._install_bm_via_uv()
+    assert result == "/fake/bm-after-install"
+    assert len(calls) == 1
+    argv = calls[0][0]
+    assert argv[0] == "/fake/uv"
+    assert argv[1:] == ["tool", "install", "basic-memory", "--quiet"]
+
+
+def test_install_bm_via_uv_failed_returncode(bm, monkeypatch):
+    """Non-zero exit logs and returns None — doesn't pretend success."""
+    class _Result:
+        returncode = 2
+        stdout = b""
+        stderr = b"network unreachable"
+
+    monkeypatch.setattr(bm, "_uv_binary_path", lambda: "/fake/uv")
+    monkeypatch.setattr(bm.subprocess, "run", lambda *a, **kw: _Result())
+
+    assert bm._install_bm_via_uv() is None
+
+
+def test_install_bm_via_uv_subprocess_exception(bm, monkeypatch):
+    """If subprocess raises (timeout, OSError, etc.) we degrade to None, not crash."""
+    monkeypatch.setattr(bm, "_uv_binary_path", lambda: "/fake/uv")
+
+    def _raise(*a, **kw):
+        raise OSError("boom")
+
+    monkeypatch.setattr(bm.subprocess, "run", _raise)
+    assert bm._install_bm_via_uv() is None
+
+
+def test_initialize_invokes_uv_install_when_bm_missing(bm, monkeypatch, tmp_path):
+    """Cold-start path: bm absent, uv present → initialize triggers install."""
+    install_calls: list = []
+
+    def _fake_install():
+        install_calls.append(True)
+        # Pretend install succeeded — but bm is still "missing" because we
+        # don't actually want the subsequent actor.start() to run.
+        # We'll let the MCP-unavailable shortcut bail us out.
+        return None  # install reports failure; initialize logs and returns
+
+    monkeypatch.setattr(bm, "_bm_binary_path", lambda: None)
+    monkeypatch.setattr(bm, "_uv_binary_path", lambda: "/fake/uv")
+    monkeypatch.setattr(bm, "_install_bm_via_uv", _fake_install)
+
+    p = bm.BasicMemoryProvider()
+    p.initialize(session_id="test", hermes_home=str(tmp_path))
+
+    assert install_calls == [True], "expected initialize() to attempt the install"
+    assert p._initialized is False  # install reported failure → don't start actor
+
+
+def test_initialize_skips_uv_install_when_bm_present(bm, monkeypatch, tmp_path):
+    """Steady-state path: bm already installed → no install attempt."""
+    install_calls: list = []
+
+    monkeypatch.setattr(bm, "_bm_binary_path", lambda: "/fake/bm")
+
+    def _fake_install():
+        install_calls.append(True)
+        return "/should-not-be-called"
+
+    monkeypatch.setattr(bm, "_install_bm_via_uv", _fake_install)
+    monkeypatch.setattr(bm, "_MCP_AVAILABLE", False)  # short-circuit actor start
+
+    p = bm.BasicMemoryProvider()
+    p.initialize(session_id="test", hermes_home=str(tmp_path))
+
+    assert install_calls == [], "should not invoke install when bm is already present"
+
+
+def test_initialize_bails_when_no_bm_no_uv(bm, monkeypatch, tmp_path, caplog):
+    """No bm, no uv → log clear error, don't try to install, don't initialize."""
+    monkeypatch.setattr(bm, "_bm_binary_path", lambda: None)
+    monkeypatch.setattr(bm, "_uv_binary_path", lambda: None)
+
+    install_calls: list = []
+    monkeypatch.setattr(
+        bm, "_install_bm_via_uv", lambda: install_calls.append(True) or None
+    )
+
+    p = bm.BasicMemoryProvider()
+    with caplog.at_level("ERROR"):
+        p.initialize(session_id="test", hermes_home=str(tmp_path))
+
+    assert install_calls == []  # never attempted — no uv to call
+    assert p._initialized is False
+    assert "uv is not installed" in caplog.text or "uv" in caplog.text.lower()
 
 
 # ---- Defaults: stay out of bm's app dir ----
