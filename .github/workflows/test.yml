@@ -1,19 +1,28 @@
 name: tests
 
+# Cancel an in-progress run when a new commit lands on the same branch — the
+# latest result is the one we care about.
+concurrency:
+  group: hbm-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
+  # Branch pushes already cover PRs (the PR branch tip is what's being tested),
+  # so we don't run the matrix twice for the same commit on push + pull_request.
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
 
 jobs:
   unit:
     name: Unit tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        # 3.11 is the runtime Hermes itself ships on today; 3.12-3.14 cover
+        # forward-compat for whenever Hermes upgrades.
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+
     steps:
       - uses: actions/checkout@v4
 
