@@ -22,9 +22,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install uv
+        # No cache (no uv.lock to key off — see test.yml comment).
         uses: astral-sh/setup-uv@v3
-        with:
-          enable-cache: true
 
       - name: Set up Python 3.12
         # basic-memory itself requires 3.12+; the bm install needs that.
