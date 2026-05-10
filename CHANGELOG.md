@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] — 2026-05-10
+
+### Changed
+- **Stronger nudge in `system_prompt_block()`** to steer agents toward the `bm_*` tools instead of shelling out to `bm` CLI. Pre-v0.1.7 the prompt listed the tools neutrally; given Claude/Hermes models' heavy training-data exposure to `bm tool ...` CLI patterns, neutral language wasn't enough — agents reached for the shell by reflex, paying 1-2s of cold-start per call instead of ~0.1s through our persistent MCP connection. New prompt is explicit (**"Use the `bm_*` tools below directly — do not shell out to the `bm` CLI"**) and gives a one-line latency rationale so the model has a reason to follow it.
+- `SKILL.md` mirrors the directive with a "Use `bm_*`, not the `bm` CLI" section + a tool-vs-CLI table.
+
+### Added
+- Regression test `test_system_prompt_block_steers_away_from_cli` locks in the directive language so future prompt edits don't accidentally weaken it.
+
 ## [0.1.6] — 2026-05-10
 
 ### Fixed
@@ -69,6 +78,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Single-file plugin at `__init__.py`, AGPL-3.0-or-later.
 - 84-test pytest suite.
 
+[0.1.7]: https://github.com/basicmachines-co/hermes-basic-memory/releases/tag/v0.1.7
 [0.1.6]: https://github.com/basicmachines-co/hermes-basic-memory/releases/tag/v0.1.6
 [0.1.5]: https://github.com/basicmachines-co/hermes-basic-memory/releases/tag/v0.1.5
 [0.1.4]: https://github.com/basicmachines-co/hermes-basic-memory/releases/tag/v0.1.4

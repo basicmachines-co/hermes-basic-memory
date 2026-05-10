@@ -193,6 +193,27 @@ def test_system_prompt_block_mentions_tools(bm):
     assert "local" in out
 
 
+def test_system_prompt_block_steers_away_from_cli(bm):
+    """
+    Felix's training data is biased toward `bm tool ...` CLI patterns. The
+    system_prompt_block must explicitly direct the model to the bm_* tools
+    AND give a reason (latency) so it has a justification for following the
+    directive. Without this nudge, agents reach for bash/terminal tools and
+    pay 1-2s per call instead of ~0.1s.
+    """
+    p = bm.BasicMemoryProvider()
+    p._initialized = True
+    p._project = "test-proj"
+    p._mode = "local"
+    out = p.system_prompt_block().lower()
+    # Directive: don't use the bm CLI
+    assert "do not shell out" in out or "do not use the" in out or "do not run" in out
+    assert "bm" in out and "cli" in out
+    # Reason given (latency / capture bypass)
+    assert "mcp" in out  # the persistent connection is the mechanism we cite
+    assert "spawn" in out or "process" in out  # cold-start cost is mentioned
+
+
 def test_save_config_writes_json(bm, tmp_path):
     p = bm.BasicMemoryProvider()
     p.save_config({"mode": "local", "project": "x", "capture_per_turn": "true"}, str(tmp_path))

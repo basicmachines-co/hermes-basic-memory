@@ -6,7 +6,23 @@ category: memory
 
 # Basic Memory Knowledge Graph
 
-You have access to a persistent knowledge graph backed by Basic Memory. The graph survives across sessions and is shared with other tools (Claude Desktop, Obsidian, the bm CLI). Use the `bm_*` tools to recall and capture information.
+You have access to a persistent knowledge graph backed by Basic Memory. The graph survives across sessions and is shared with other tools (Claude Desktop, Obsidian, the `bm` CLI). Use the `bm_*` tools below to recall and capture information.
+
+## Use `bm_*`, not the `bm` CLI
+
+**Always invoke the `bm_*` tools directly. Do not shell out to the `bm` CLI for note operations.**
+
+The `bm_*` tools route through a persistent MCP connection — roughly 0.1 seconds per call. Running `bm` from the shell spawns a fresh Python process per call (1-2 seconds of cold-start every time) and bypasses Hermes's automatic per-turn capture, so the session-transcript and summary notes won't reflect what you did.
+
+The CLI is fine when you genuinely need a feature these wrappers don't expose (rare). Otherwise, prefer:
+
+| Use case | Tool (not CLI) |
+|---|---|
+| Search the graph | `bm_search` |
+| Read a note | `bm_read` |
+| Create / update a note | `bm_write` / `bm_edit` |
+| Navigate relations | `bm_context` |
+| Move / delete | `bm_move` / `bm_delete` |
 
 ## Tool reference
 

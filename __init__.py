@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from agent.memory_provider import MemoryProvider
 from tools.registry import tool_error
 
-__version__ = "0.1.6"
+__version__ = "0.1.7"
 
 logger = logging.getLogger("hermes.memory.basic-memory")
 
@@ -780,14 +780,26 @@ class BasicMemoryProvider(MemoryProvider):
             return ""
         return (
             "## Basic Memory Knowledge Graph\n"
-            "You have a persistent knowledge graph. Tools:\n"
-            "- bm_search: search before answering — context may already exist\n"
-            "- bm_read: fetch a note by title, permalink, or memory:// URL\n"
-            "- bm_context: navigate via memory:// URLs to find related notes\n"
-            "- bm_write: capture decisions, insights, meeting notes worth preserving\n"
-            "- bm_edit: append updates or fix existing notes (append/prepend/find_replace/replace_section)\n"
-            "- bm_delete / bm_move: maintenance operations\n"
-            f"Active project: `{self._project}` ({self._mode})"
+            f"Active project: `{self._project}` ({self._mode}).\n"
+            "\n"
+            "**Use the `bm_*` tools below directly — do not shell out to the `bm` CLI.** "
+            "These tools route through a persistent MCP connection "
+            "(~0.1s/call); running `bm` from the shell spawns a fresh Python "
+            "process per call (~1-2s) and bypasses Hermes's automatic per-turn "
+            "capture.\n"
+            "\n"
+            "- `bm_search(query)` — call BEFORE answering about prior decisions, "
+            "projects, meetings, or anything that might already be documented\n"
+            "- `bm_read(identifier)` — fetch a note by title, permalink, or "
+            "memory:// URL\n"
+            "- `bm_context(url)` — navigate via memory:// URLs to find related "
+            "notes\n"
+            "- `bm_write(title, content, folder)` — capture decisions, insights, "
+            "meeting outcomes worth preserving\n"
+            "- `bm_edit(identifier, operation, content)` — append, prepend, "
+            "find_replace, replace_section\n"
+            "- `bm_delete(identifier)` / `bm_move(identifier, new_folder)` — "
+            "maintenance"
         )
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
