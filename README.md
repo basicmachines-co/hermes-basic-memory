@@ -76,6 +76,25 @@ The plugin is a single-file Python module at `__init__.py`. The Hermes plugin lo
 
 The repo dir is the deployable package — symlink it directly into `~/.hermes/plugins/basic-memory`.
 
+### Running tests
+
+```bash
+# Unit tests (fast, hermetic — no Hermes or bm required)
+uv run --with pytest pytest
+
+# Integration tests (gated — exercise every tool against a real bm MCP server)
+BM_INTEGRATION=1 uv run --with pytest --with mcp pytest tests/test_integration.py
+```
+
+The unit suite stubs out Hermes-internal imports (`agent.memory_provider`, `tools.registry`) so it runs without a Hermes install. `mcp` is optional at unit-test time — its absence just makes `is_available()` return `False`, which the tests verify.
+
+Integration tests require:
+- `BM_INTEGRATION=1` (env var gate)
+- `bm` CLI on PATH
+- `mcp` Python package importable (`uv run --with mcp ...`)
+
+Each integration session creates a unique throwaway BM project (under `tempfile.mkdtemp`) and removes it on teardown, so they never touch your real BM projects.
+
 ## License
 
 AGPL-3.0-or-later, matching [basic-memory](https://github.com/basicmachines-co/basic-memory). See [LICENSE](LICENSE).

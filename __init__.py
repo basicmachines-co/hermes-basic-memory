@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import concurrent.futures
 import json
 import logging
 import os
@@ -36,6 +37,8 @@ from typing import Any, Dict, List, Optional, Tuple
 # when loading plugins (same pattern as plugins/memory/mem0/__init__.py:21).
 from agent.memory_provider import MemoryProvider
 from tools.registry import tool_error
+
+__version__ = "0.1.1"
 
 logger = logging.getLogger("hermes.memory.basic-memory")
 
@@ -280,29 +283,56 @@ def _extract_mcp_text(result: Any) -> str:
         return json.dumps({"text": text})
 
 
+_PERMALINK_JSON_RE = re.compile(r'"permalink"\s*:\s*"([^"]+)"')
+_PERMALINK_MD_RE = re.compile(r"^\s*permalink\s*:\s*(\S+)\s*$", re.MULTILINE)
+
+
 def _extract_permalink(text: str, fallback: str) -> str:
     """
-    Try hard to extract a note permalink from a write_note result.
-    BM may return JSON directly or `{"text": "<json or markdown>"}`.
+    Extract a note permalink from any plausible BM response shape:
+
+    1. Bare JSON dict with `permalink` key (output_format=json path)
+    2. `{"text": "..."}` wrapping inner JSON or markdown
+    3. Raw markdown response text (output_format=text default)
+
+    Falls back to the supplied fallback when nothing matches.
     """
+    if not isinstance(text, str) or not text:
+        return fallback
+
+    # Strategy 1: parse outer as JSON
     try:
         d = json.loads(text)
-    except Exception:
-        return fallback
-    if isinstance(d, dict):
-        if isinstance(d.get("permalink"), str):
-            return d["permalink"]
-        inner = d.get("text")
-        if isinstance(inner, str):
-            try:
-                d2 = json.loads(inner)
-                if isinstance(d2, dict) and isinstance(d2.get("permalink"), str):
-                    return d2["permalink"]
-            except Exception:
-                # Fallback: regex for `permalink: foo/bar` in markdown
-                m = re.search(r"permalink[:\s]+([a-zA-Z0-9_/.-]+)", inner)
+        if isinstance(d, dict):
+            if isinstance(d.get("permalink"), str):
+                return d["permalink"]
+            inner = d.get("text")
+            if isinstance(inner, str):
+                # Strategy 2: inner is JSON
+                try:
+                    d2 = json.loads(inner)
+                    if isinstance(d2, dict) and isinstance(d2.get("permalink"), str):
+                        return d2["permalink"]
+                except Exception:
+                    pass
+                # Strategy 3a: inner is markdown with `permalink: ...` line
+                m = _PERMALINK_MD_RE.search(inner)
+                if m:
+                    return m.group(1).rstrip(",.;")
+                # Strategy 3b: inner contains JSON substring with permalink
+                m = _PERMALINK_JSON_RE.search(inner)
                 if m:
                     return m.group(1)
+    except Exception:
+        pass
+
+    # Strategy 4: best-effort regex on raw text (covers exotic shapes)
+    m = _PERMALINK_JSON_RE.search(text)
+    if m:
+        return m.group(1)
+    m = _PERMALINK_MD_RE.search(text)
+    if m:
+        return m.group(1).rstrip(",.;")
     return fallback
 
 
@@ -331,19 +361,23 @@ class _BmMcpActor:
         self._init_error: Optional[BaseException] = None
         self._stop_future: Optional[asyncio.Future] = None
         self._tools_cache: List[Dict[str, Any]] = []
+        self._running = False
 
     def start(self, timeout: float = 25.0) -> None:
         if self._thread and self._thread.is_alive():
             return
+        self._running = True
         self._thread = threading.Thread(
             target=self._run, daemon=True, name="bm-mcp-actor"
         )
         self._thread.start()
         if not self._ready.wait(timeout=timeout):
+            self._running = False
             raise TimeoutError(
                 f"basic-memory MCP server didn't initialize within {timeout}s"
             )
         if self._init_error is not None:
+            self._running = False
             raise RuntimeError(
                 f"basic-memory MCP server failed to start: {self._init_error}"
             )
@@ -360,6 +394,7 @@ class _BmMcpActor:
             self._ready.set()
             logger.exception("basic-memory MCP actor terminated with error")
         finally:
+            self._running = False
             try:
                 loop.close()
             except Exception:
@@ -398,19 +433,29 @@ class _BmMcpActor:
             raise
 
     def call(self, tool_name: str, arguments: Dict[str, Any], timeout: float = 30.0) -> str:
+        if not self._running:
+            raise RuntimeError("basic-memory MCP actor not running")
         if self._loop is None or self._session is None:
             raise RuntimeError("basic-memory MCP actor not started")
         future = asyncio.run_coroutine_threadsafe(
             self._session.call_tool(tool_name, arguments),
             self._loop,
         )
-        result = future.result(timeout=timeout)
+        try:
+            result = future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            # Cancel the coroutine on the actor loop so we don't leak
+            # a stuck call_tool. cancel() on a run_coroutine_threadsafe
+            # future propagates cancellation into the wrapped coroutine.
+            future.cancel()
+            raise
         return _extract_mcp_text(result)
 
     def list_tools(self) -> List[Dict[str, Any]]:
         return list(self._tools_cache)
 
     def shutdown(self, timeout: float = 5.0) -> None:
+        self._running = False
         if self._loop is not None and self._stop_future is not None:
             try:
                 self._loop.call_soon_threadsafe(
@@ -418,6 +463,7 @@ class _BmMcpActor:
                     and self._stop_future.set_result(None)
                 )
             except Exception:
+                # Loop may already be closed; safe to ignore.
                 pass
         if self._thread is not None:
             try:
@@ -696,9 +742,13 @@ class BasicMemoryProvider(MemoryProvider):
             return ""
         lines = ["## Basic Memory Recall"]
         for r in list(results)[:5]:
-            title = r.get("title", "(untitled)")
-            permalink = r.get("permalink", "")
+            if not isinstance(r, dict):
+                continue
+            title = str(r.get("title") or "(untitled)")
+            permalink = str(r.get("permalink") or "")
             preview_raw = r.get("content") or r.get("preview") or ""
+            if not isinstance(preview_raw, str):
+                preview_raw = str(preview_raw)
             preview = re.sub(r"\s+", " ", preview_raw)[:200]
             lines.append(f"- **{title}** (`{permalink}`) — {preview}")
         return "\n".join(lines)
@@ -766,8 +816,14 @@ class BasicMemoryProvider(MemoryProvider):
 
     def _session_note_title(self) -> str:
         ts = (self._session_started_at or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H%M")
-        sid = (self._session_id or "no-id")[:8]
-        return f"Hermes Session {ts} {sid}"
+        # Hermes session IDs encode the date in the prefix (e.g. 20260510_080249_571920).
+        # Use the trailing random component for disambiguation; falling back to seconds
+        # only when there is no session id at all.
+        sid = self._session_id or ""
+        suffix = sid.rsplit("_", 1)[-1] if "_" in sid else sid[-6:]
+        if not suffix:
+            suffix = (self._session_started_at or datetime.now(timezone.utc)).strftime("%S")
+        return f"Hermes Session {ts} {suffix}"
 
     # ---- Session-end summary ----
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
@@ -792,8 +848,11 @@ class BasicMemoryProvider(MemoryProvider):
         if asst_msgs:
             last_asst = _truncate(_join_message_content(asst_msgs[-1].get("content")), 600)
         ts = (self._session_started_at or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H%M")
-        sid = (self._session_id or "no-id")[:8]
-        title = f"Hermes Session Summary {ts} {sid}"
+        sid = self._session_id or ""
+        suffix = sid.rsplit("_", 1)[-1] if "_" in sid else sid[-6:]
+        if not suffix:
+            suffix = (self._session_started_at or datetime.now(timezone.utc)).strftime("%S")
+        title = f"Hermes Session Summary {ts} {suffix}"
         lines = [
             f"# {title}",
             "",
