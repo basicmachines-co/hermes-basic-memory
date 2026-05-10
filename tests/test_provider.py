@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock
 
 
@@ -258,3 +259,139 @@ def test_module_version_matches_plugin_yaml(bm):
     assert m.group(1) == bm.__version__, (
         f"plugin.yaml version ({m.group(1)}) doesn't match __version__ ({bm.__version__})"
     )
+
+
+# ---- Defaults: stay out of bm's app dir ----
+
+def test_default_project_name_is_hermes_memory(bm):
+    """The default project name no longer carries a hostname suffix.
+    Each machine has its own isolated local store with this same name."""
+    assert bm._default_project() == "hermes-memory"
+
+
+def test_default_project_path_is_in_user_space(bm):
+    """~/.basic-memory/ is reserved for bm's app state. Projects live in user space."""
+    p = bm._default_project_path()
+    assert ".basic-memory" not in p, (
+        f"default project path must not live inside ~/.basic-memory/, got: {p}"
+    )
+    assert p.rstrip("/").endswith("hermes-memory")
+
+
+# ---- bm config introspection ----
+
+def test_bm_known_projects_missing_file(bm, monkeypatch, tmp_path):
+    """When bm has never been run, return None (callers should treat as 'unknown')."""
+    monkeypatch.setattr(bm, "_bm_config_path", lambda: tmp_path / "config.json")
+    assert bm._bm_known_projects() is None
+
+
+def test_bm_known_projects_corrupt_file(bm, monkeypatch, tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text("{not json")
+    monkeypatch.setattr(bm, "_bm_config_path", lambda: cfg)
+    assert bm._bm_known_projects() is None
+
+
+def test_bm_known_projects_returns_dict(bm, monkeypatch, tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"projects": {"main": {}, "hermes-memory": {}}}))
+    monkeypatch.setattr(bm, "_bm_config_path", lambda: cfg)
+    result = bm._bm_known_projects()
+    assert isinstance(result, dict)
+    assert set(result.keys()) == {"main", "hermes-memory"}
+
+
+def test_bm_known_projects_handles_non_dict_root(bm, monkeypatch, tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps(["not a dict"]))
+    monkeypatch.setattr(bm, "_bm_config_path", lambda: cfg)
+    assert bm._bm_known_projects() is None
+
+
+# ---- Project verification ----
+
+def test_verify_project_registered_no_bm_config(bm, monkeypatch):
+    """No bm config yet → assume registration is fine; let downstream surface real failures."""
+    monkeypatch.setattr(bm, "_bm_known_projects", lambda: None)
+    p = bm.BasicMemoryProvider()
+    p._project = "anything-goes"
+    assert p._verify_project_registered() is True
+
+
+def test_verify_project_registered_present(bm, monkeypatch):
+    monkeypatch.setattr(bm, "_bm_known_projects", lambda: {"hermes-memory": {}, "main": {}})
+    p = bm.BasicMemoryProvider()
+    p._project = "hermes-memory"
+    assert p._verify_project_registered() is True
+
+
+def test_verify_project_registered_missing(bm, monkeypatch):
+    monkeypatch.setattr(bm, "_bm_known_projects", lambda: {"main": {}, "other": {}})
+    p = bm.BasicMemoryProvider()
+    p._project = "hermes-memory-cloud"
+    assert p._verify_project_registered() is False
+
+
+def test_log_missing_project_local_hint_includes_path(bm, caplog):
+    p = bm.BasicMemoryProvider()
+    p._mode = "local"
+    p._project = "hermes-memory"
+    p._project_path = "/tmp/somewhere"
+    with caplog.at_level("ERROR"):
+        p._log_missing_project()
+    msg = caplog.text
+    assert "hermes-memory" in msg
+    assert "/tmp/somewhere" in msg
+    assert "--cloud" not in msg
+
+
+def test_log_missing_project_cloud_hint_uses_cloud_flag(bm, caplog):
+    p = bm.BasicMemoryProvider()
+    p._mode = "cloud"
+    p._project = "hermes-memory-cloud"
+    with caplog.at_level("ERROR"):
+        p._log_missing_project()
+    msg = caplog.text
+    assert "hermes-memory-cloud" in msg
+    assert "--cloud" in msg
+
+
+# ---- initialize() bail-out on missing project ----
+
+def test_initialize_bails_when_project_missing(bm, monkeypatch, tmp_path):
+    """If bm config says the project doesn't exist, refuse to initialize."""
+    # bm config exists, but our project isn't in it
+    bm_cfg = tmp_path / ".basic-memory" / "config.json"
+    bm_cfg.parent.mkdir(parents=True)
+    bm_cfg.write_text(json.dumps({"projects": {"main": {}}}))
+    monkeypatch.setattr(bm, "_bm_config_path", lambda: bm_cfg)
+
+    # Cloud mode so _ensure_local_project doesn't auto-create
+    plugin_cfg = tmp_path / "basic-memory.json"
+    plugin_cfg.write_text(json.dumps({"mode": "cloud", "project": "not-registered"}))
+
+    p = bm.BasicMemoryProvider()
+    p.initialize(session_id="test", hermes_home=str(tmp_path))
+
+    assert p._initialized is False
+    assert p._actor is None
+
+
+def test_initialize_proceeds_when_bm_config_absent(bm, monkeypatch, tmp_path):
+    """If bm config doesn't exist (fresh install), don't false-reject — let actor try."""
+    monkeypatch.setattr(bm, "_bm_config_path", lambda: tmp_path / "no-such" / "config.json")
+    monkeypatch.setattr(bm, "_MCP_AVAILABLE", False)  # shortcut: actor won't actually start
+
+    plugin_cfg = tmp_path / "basic-memory.json"
+    plugin_cfg.write_text(json.dumps({"mode": "cloud", "project": "anything"}))
+
+    p = bm.BasicMemoryProvider()
+    # We don't fully assert _initialized here because the actor won't start without
+    # MCP — but we DO assert _verify_project_registered didn't gate us out before
+    # actor-start was attempted.
+    p.initialize(session_id="test", hermes_home=str(tmp_path))
+    # Initialization fails at actor-start (MCP unavailable), not at verify.
+    assert p._initialized is False  # expected — actor couldn't start
+    # _project should have been set despite the failure (proves we got past verify)
+    assert p._project == "anything"

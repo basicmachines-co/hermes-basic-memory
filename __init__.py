@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from agent.memory_provider import MemoryProvider
 from tools.registry import tool_error
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 logger = logging.getLogger("hermes.memory.basic-memory")
 
@@ -200,15 +200,44 @@ def _hostname() -> str:
 
 
 def _default_project() -> str:
-    return f"hermes-{_hostname()}"
+    # Each machine gets its own local project with this name. Cloud setups
+    # use a different name (e.g. hermes-memory-cloud) so the two don't
+    # collide in BM's per-workspace project registry.
+    return "hermes-memory"
 
 
 def _default_project_path() -> str:
-    return os.path.expanduser("~/.basic-memory/hermes/")
+    # ~/.basic-memory/ is reserved for BM's own application state; user
+    # project files live in user space, parallel to ~/basic-memory/.
+    return os.path.expanduser("~/hermes-memory/")
 
 
 def _config_path(hermes_home: str) -> Path:
     return Path(hermes_home) / "basic-memory.json"
+
+
+def _bm_config_path() -> Path:
+    """Location of bm's own project registry."""
+    return Path.home() / ".basic-memory" / "config.json"
+
+
+def _bm_known_projects() -> Optional[Dict[str, Any]]:
+    """
+    Read bm's project registry. Returns None if the file is absent or
+    unparseable — callers should treat that as "can't prove anything"
+    rather than "project is missing".
+    """
+    path = _bm_config_path()
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    projects = data.get("projects")
+    return projects if isinstance(projects, dict) else None
 
 
 def _load_config(hermes_home: str) -> Dict[str, Any]:
@@ -571,6 +600,10 @@ class BasicMemoryProvider(MemoryProvider):
         if self._mode == "local":
             self._ensure_local_project()
 
+        if not self._verify_project_registered():
+            self._log_missing_project()
+            return
+
         try:
             argv = self._server_argv()
         except Exception as e:
@@ -618,6 +651,35 @@ class BasicMemoryProvider(MemoryProvider):
             )
         except Exception as e:
             logger.debug("bm project add: %s", e)
+
+    def _verify_project_registered(self) -> bool:
+        """
+        Confirm the configured project is registered with bm.
+
+        Returns False only when we can prove the project is missing
+        (bm config exists, parses, and the project name is absent).
+        Otherwise returns True — including when bm's config doesn't exist
+        yet — so we don't false-positive-reject on first-run setups.
+        """
+        projects = _bm_known_projects()
+        if projects is None:
+            return True
+        return self._project in projects
+
+    def _log_missing_project(self) -> None:
+        if self._mode == "cloud":
+            hint = (
+                f"`bm project add {self._project} --cloud` "
+                "(optionally with --local-path) first"
+            )
+        else:
+            hint = f"`bm project add {self._project} {self._project_path}` first"
+        logger.error(
+            "basic-memory: project %r is not registered with bm. Run %s. "
+            "Provider will not initialize.",
+            self._project,
+            hint,
+        )
 
     def _server_argv(self) -> List[str]:
         bm = _bm_binary_path()
