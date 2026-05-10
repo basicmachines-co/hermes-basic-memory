@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] — 2026-05-10
+
+### Fixed
+- **`bm_*` tools were never registered with Hermes's `MemoryManager._tool_to_provider`.** `get_tool_schemas()` was gated on `self._initialized`, but Hermes captures the schema list at *register* time — before `initialize()` runs. The gate caused every session to start with zero tools registered for our provider, so every LLM-issued `bm_search` (and friends) returned `"Unknown tool: bm_search"` from MemoryManager's dispatch. Symptoms were asymmetric: prefetch (recall injection) worked because it's invoked per-turn after init, but tool calls didn't. Schemas are static — they now return unconditionally, with `handle_tool_call()` doing the runtime "is the actor ready?" gate.
+- Regression test pins this so we don't reintroduce it: `test_get_tool_schemas_unconditional` asserts `get_tool_schemas()` returns all 7 schemas on a fresh, uninitialized provider.
+
 ## [0.1.5] — 2026-05-10
 
 ### Added
@@ -63,6 +69,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Single-file plugin at `__init__.py`, AGPL-3.0-or-later.
 - 84-test pytest suite.
 
+[0.1.6]: https://github.com/basicmachines-co/hermes-basic-memory/releases/tag/v0.1.6
 [0.1.5]: https://github.com/basicmachines-co/hermes-basic-memory/releases/tag/v0.1.5
 [0.1.4]: https://github.com/basicmachines-co/hermes-basic-memory/releases/tag/v0.1.4
 [0.1.3]: https://github.com/basicmachines-co/hermes-basic-memory/releases/tag/v0.1.3

@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from agent.memory_provider import MemoryProvider
 from tools.registry import tool_error
 
-__version__ = "0.1.5"
+__version__ = "0.1.6"
 
 logger = logging.getLogger("hermes.memory.basic-memory")
 
@@ -791,8 +791,12 @@ class BasicMemoryProvider(MemoryProvider):
         )
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        if not self._initialized:
-            return []
+        # Static. Hermes captures the schema list at register time (before
+        # initialize() has run), so gating on `_initialized` would mean the
+        # tools never make it into MemoryManager._tool_to_provider, and every
+        # `bm_*` invocation returns "Unknown tool: bm_*" for the rest of the
+        # session. handle_tool_call() does the runtime gate on `_initialized`
+        # and returns a clean tool error if the actor isn't ready yet.
         return [dict(s) for s in TOOL_SCHEMAS]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs: Any) -> str:

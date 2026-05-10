@@ -44,17 +44,32 @@ def test_name(bm):
     assert bm.BasicMemoryProvider().name == bm.PROVIDER_NAME
 
 
-def test_get_tool_schemas_uninitialized(bm):
+def test_get_tool_schemas_unconditional(bm):
+    """
+    Regression: Hermes captures the schema list at *register* time, before
+    `initialize()` runs. If get_tool_schemas() returns [] when uninitialized,
+    Hermes builds _tool_to_provider with no entries for us and every
+    subsequent bm_* invocation returns "Unknown tool: bm_*" forever.
+    Schemas are static — return them unconditionally.
+    """
+    # Fresh provider, never initialized, should still expose all 7 schemas
     p = bm.BasicMemoryProvider()
-    assert p.get_tool_schemas() == []
-
-
-def test_get_tool_schemas_initialized(bm):
-    p = bm.BasicMemoryProvider()
-    p._initialized = True
+    assert p._initialized is False
     schemas = p.get_tool_schemas()
     assert len(schemas) == 7
-    # Returned list is a copy (mutating shouldn't affect class state)
+    names = {s["name"] for s in schemas}
+    assert names == {"bm_search", "bm_read", "bm_write", "bm_edit",
+                     "bm_context", "bm_delete", "bm_move"}
+
+    # Initialized provider also returns 7 (idempotent)
+    p._initialized = True
+    assert len(p.get_tool_schemas()) == 7
+
+
+def test_get_tool_schemas_returns_independent_copies(bm):
+    """Mutating the returned list shouldn't affect the next call."""
+    p = bm.BasicMemoryProvider()
+    schemas = p.get_tool_schemas()
     schemas.clear()
     assert len(p.get_tool_schemas()) == 7
 
