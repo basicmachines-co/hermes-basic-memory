@@ -45,24 +45,66 @@ hermes memory status
 
 ## Configuration
 
-Defaults are reasonable for local use. To tune, write `~/.hermes/basic-memory.json`:
+Defaults are reasonable for local use:
+
+| Key | Default |
+|---|---|
+| `mode` | `local` |
+| `project` | `hermes-memory` |
+| `project_path` | `~/hermes-memory/` |
+| `capture_folder` | `hermes-sessions` |
+| `capture_per_turn` | `true` |
+| `capture_session_end` | `true` |
+
+To override, write `~/.hermes/basic-memory.json` (or run `hermes memory setup basic-memory` for the wizard):
 
 ```json
 {
   "mode": "local",
-  "project": "hermes-jodys-imac",
-  "project_path": "~/.basic-memory/hermes/",
+  "project": "hermes-memory",
+  "project_path": "~/hermes-memory/",
   "capture_per_turn": true,
   "capture_session_end": true,
   "capture_folder": "hermes-sessions"
 }
 ```
 
-Or run `hermes memory setup basic-memory` for the wizard.
+In local mode the plugin auto-creates the BM project on first init via `bm project add`. In cloud mode it doesn't — you create the cloud-routed project yourself (see below) and the plugin verifies it's registered before initializing.
 
 ### Cloud mode
 
-Set `mode: cloud`. Requires `bm cloud login` to have been run on the host. The plugin shells out to `bm mcp` regardless of mode — the BM CLI handles cloud routing.
+When `mode: cloud`, tool calls route directly through the BM cloud API — no local file mirror, no bisync. You set this up once with the BM CLI:
+
+```bash
+# Authenticate (OAuth) or save an API key
+bm cloud login                     # OAuth — interactive
+# OR for headless/automation:
+bm cloud create-key "hermes"       # creates a new API key
+bm cloud set-key bmc_...           # saves the key
+
+# Create the project, then flip it to cloud routing.
+# --workspace is required if you belong to more than one workspace
+# (otherwise BM auto-resolves the only one available).
+bm project add hermes-memory-cloud
+bm project set-cloud hermes-memory-cloud --workspace Personal
+
+# Point the plugin at it
+cat > ~/.hermes/basic-memory.json <<EOF
+{
+  "mode": "cloud",
+  "project": "hermes-memory-cloud",
+  "capture_per_turn": true,
+  "capture_session_end": true,
+  "capture_folder": "hermes-sessions"
+}
+EOF
+
+hermes gateway restart   # if you're using the gateway
+```
+
+Tool calls now route from `bm mcp` → `<cloud_host>/proxy` over HTTPS using your OAuth token (or API key). Notes never touch local disk.
+
+**Don't confuse this with `bm cloud bisync`.** Bisync is rclone-style two-way file sync between a *local* project and cloud storage, intended for keeping local working copies. For agent-driven capture you want true cloud routing (`set-cloud`), not bisync.
 
 ## Foot-guns
 
