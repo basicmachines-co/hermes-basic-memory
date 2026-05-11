@@ -2,7 +2,7 @@
 
 This document describes the Hermes Agent-side patch needed when `/bm-*` slash commands do not appear in the gateway even though the Basic Memory provider itself is installed and working.
 
-Agents may use this file as a guide to add support for `/bm-*` slash commands.
+Agents may use this file as a guide to add support for `/bm-*` slash commands in Hermes Agent builds that do not yet include the upstream fix.
 
 ## Problem
 
@@ -42,7 +42,7 @@ hermes_cli/plugins.py
 plugins/memory/__init__.py
 ```
 
-Recommended tests to add/update:
+Recommended tests to add/update in Hermes Agent:
 
 ```text
 tests/hermes_cli/test_plugin_cli_registration.py

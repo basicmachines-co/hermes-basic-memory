@@ -682,6 +682,13 @@ class BasicMemoryProvider(MemoryProvider):
         self._capture_folder = cfg.get("capture_folder") or "hermes-sessions"
         self._remember_folder = cfg.get("remember_folder") or "bm-remember"
 
+        if not _MCP_AVAILABLE:
+            logger.error(
+                "basic-memory: MCP SDK unavailable; provider will not initialize: %s",
+                _MCP_IMPORT_ERROR,
+            )
+            return
+
         # Bootstrap-install bm via uv if it's not already on disk. One-time cost
         # on a fresh machine; idempotent no-op once basic-memory is installed.
         if not _bm_binary_path():
@@ -1229,8 +1236,37 @@ def _format_result_rows(items: List[Any], header: str, empty_msg: str) -> str:
     return "\n".join(lines)
 
 
+_slash_init_lock = threading.Lock()
+
+
 def _slash_uninit(cmd: str) -> str:
     return f"{cmd}: basic-memory provider not initialized. Run `hermes memory status` to diagnose."
+
+
+def _ensure_slash_ready(provider: "BasicMemoryProvider", cmd: str) -> Optional[str]:
+    """Lazily initialize the provider for human-invoked /bm-* commands.
+
+    Hermes gateway command discovery can load memory-provider plugins before an
+    agent session initializes memory. Slash handlers close over that discovered
+    provider instance, so they need a small on-demand initialization path before
+    touching the BM MCP actor.
+    """
+    if provider._initialized and provider._actor is not None:
+        return None
+    with _slash_init_lock:
+        if provider._initialized and provider._actor is not None:
+            return None
+        try:
+            provider.initialize(
+                session_id=f"slash:{cmd}:{int(time.time())}",
+                hermes_home=os.path.expanduser("~/.hermes"),
+            )
+        except Exception as e:
+            logger.warning("basic-memory: slash init for /%s failed: %s", cmd, e)
+            return f"{cmd}: failed to initialize basic-memory provider: {e}"
+    if not provider._initialized or provider._actor is None:
+        return _slash_uninit(cmd)
+    return None
 
 
 def _remember_title(text: str) -> str:
@@ -1255,8 +1291,8 @@ def _build_slash_commands(
         args = raw_args.strip()
         if not args or _is_help_arg(args):
             return _SLASH_USAGE["bm-search"]
-        if not provider._initialized or provider._actor is None:
-            return _slash_uninit("bm-search")
+        if err := _ensure_slash_ready(provider, "bm-search"):
+            return err
         try:
             raw = provider._actor.call(
                 "search_notes",
@@ -1282,8 +1318,8 @@ def _build_slash_commands(
         args = raw_args.strip()
         if not args or _is_help_arg(args):
             return _SLASH_USAGE["bm-read"]
-        if not provider._initialized or provider._actor is None:
-            return _slash_uninit("bm-read")
+        if err := _ensure_slash_ready(provider, "bm-read"):
+            return err
         try:
             raw = provider._actor.call(
                 "read_note",
@@ -1301,8 +1337,8 @@ def _build_slash_commands(
         args = raw_args.strip()
         if not args or _is_help_arg(args):
             return _SLASH_USAGE["bm-context"]
-        if not provider._initialized or provider._actor is None:
-            return _slash_uninit("bm-context")
+        if err := _ensure_slash_ready(provider, "bm-context"):
+            return err
         try:
             raw = provider._actor.call(
                 "build_context",
@@ -1321,8 +1357,8 @@ def _build_slash_commands(
         if _is_help_arg(args):
             return _SLASH_USAGE["bm-recent"]
         timeframe = args or "7d"
-        if not provider._initialized or provider._actor is None:
-            return _slash_uninit("bm-recent")
+        if err := _ensure_slash_ready(provider, "bm-recent"):
+            return err
         try:
             raw = provider._actor.call(
                 "recent_activity",
@@ -1385,8 +1421,8 @@ def _build_slash_commands(
         text = raw_args.strip()
         if not text or _is_help_arg(text):
             return _SLASH_USAGE["bm-remember"]
-        if not provider._initialized or provider._actor is None:
-            return _slash_uninit("bm-remember")
+        if err := _ensure_slash_ready(provider, "bm-remember"):
+            return err
         title = _remember_title(text)
         folder = provider._remember_folder or "bm-remember"
         try:
@@ -1410,8 +1446,8 @@ def _build_slash_commands(
     def _bm_project(raw_args: str) -> str:
         if _is_help_arg(raw_args):
             return _SLASH_USAGE["bm-project"]
-        if not provider._initialized or provider._actor is None:
-            return _slash_uninit("bm-project")
+        if err := _ensure_slash_ready(provider, "bm-project"):
+            return err
         try:
             raw = provider._actor.call(
                 "list_memory_projects",
@@ -1452,8 +1488,8 @@ def _build_slash_commands(
                 "Workspaces are a Basic Memory Cloud concept. "
                 f"This plugin is in '{provider._mode}' mode — no workspaces to list."
             )
-        if not provider._initialized or provider._actor is None:
-            return _slash_uninit("bm-workspace")
+        if err := _ensure_slash_ready(provider, "bm-workspace"):
+            return err
         try:
             raw = provider._actor.call(
                 "list_workspaces",

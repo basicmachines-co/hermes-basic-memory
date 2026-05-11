@@ -102,7 +102,7 @@ In plugin v0.2.0 the commands above are registered by this plugin, but some Herm
 
 This is a Hermes Agent plugin-discovery issue, not a Basic Memory runtime issue. It is tracked upstream in [NousResearch/hermes-agent#23603](https://github.com/NousResearch/hermes-agent/issues/23603). Until the upstream Hermes fix is available in your installed Hermes version, use one of these workarounds:
 
-1. apply the Hermes-side patch described in [MONKEYPATCH.md](MONKEYPATCH.md), which loads the active memory provider during plugin command discovery; or
+1. apply the Hermes Agent-side patch described in [MONKEYPATCH.md](MONKEYPATCH.md), which loads the active memory provider during plugin command discovery; or
 2. use the agent tools directly (`bm_search`, `bm_read`, `bm_recent`, etc.) instead of native slash commands.
 
 After applying an updated or patched Hermes build, restart the gateway so Discord/native slash commands are re-synced:

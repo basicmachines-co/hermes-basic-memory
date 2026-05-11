@@ -353,12 +353,32 @@ def test_usage_returned_for_empty_or_help_args(bm, name, args):
     ("bm-remember", "a thought"),
     ("bm-project", ""),
 ])
-def test_handler_uninitialized_returns_message(bm, name, args):
+def test_handler_init_failure_returns_message(bm, monkeypatch, name, args):
     provider = bm.BasicMemoryProvider()
+    monkeypatch.setattr(provider, "initialize", lambda *a, **kw: None)
     handlers = _handlers_by_name(bm, provider)
     out = handlers[name](args)
     assert "not initialized" in out
     assert name in out  # message includes command name
+
+
+def test_handler_lazily_initializes_provider_for_slash_command(bm, monkeypatch):
+    provider = bm.BasicMemoryProvider()
+    calls = []
+
+    def fake_initialize(*args, **kwargs):
+        calls.append((args, kwargs))
+        session = FakeSession(default_response={"results": []})
+        actor = make_scripted_actor(bm, session=session)
+        actor.start()
+        provider._actor = actor
+        provider._initialized = True
+
+    monkeypatch.setattr(provider, "initialize", fake_initialize)
+    out = _handlers_by_name(bm, provider)["bm-search"]("widgets")
+    assert "No results" in out
+    assert len(calls) == 1
+    assert calls[0][1]["session_id"].startswith("slash:bm-search:")
 
 
 # ---- /bm-status ----
