@@ -418,11 +418,9 @@ def test_initialize_invokes_uv_install_when_bm_missing(bm, monkeypatch, tmp_path
 
     def _fake_install():
         install_calls.append(True)
-        # Pretend install succeeded — but bm is still "missing" because we
-        # don't actually want the subsequent actor.start() to run.
-        # We'll let the MCP-unavailable shortcut bail us out.
         return None  # install reports failure; initialize logs and returns
 
+    monkeypatch.setattr(bm, "_MCP_AVAILABLE", True)
     monkeypatch.setattr(bm, "_bm_binary_path", lambda: None)
     monkeypatch.setattr(bm, "_uv_binary_path", lambda: "/fake/uv")
     monkeypatch.setattr(bm, "_install_bm_via_uv", _fake_install)
@@ -455,6 +453,7 @@ def test_initialize_skips_uv_install_when_bm_present(bm, monkeypatch, tmp_path):
 
 def test_initialize_bails_when_no_bm_no_uv(bm, monkeypatch, tmp_path, caplog):
     """No bm, no uv → log clear error, don't try to install, don't initialize."""
+    monkeypatch.setattr(bm, "_MCP_AVAILABLE", True)
     monkeypatch.setattr(bm, "_bm_binary_path", lambda: None)
     monkeypatch.setattr(bm, "_uv_binary_path", lambda: None)
 
