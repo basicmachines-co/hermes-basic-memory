@@ -47,7 +47,7 @@ Expected:
 
 ## What the agent gets
 
-Seven tools (curated subset of Basic Memory's MCP surface):
+Eight tools (curated subset of Basic Memory's MCP surface):
 
 | Tool | Use |
 |---|---|
@@ -58,12 +58,39 @@ Seven tools (curated subset of Basic Memory's MCP surface):
 | `bm_context` | Navigate via `memory://` URLs to find related notes |
 | `bm_delete` | Delete a note |
 | `bm_move` | Move a note to a different folder |
+| `bm_recent` | List notes updated recently (default `7d`; accepts natural-language timeframes) |
 
 Plus automatic capture:
 - **Per turn**: every user/assistant exchange appends to a running session-transcript note
 - **End of session**: a separate summary note is written, linked back to the transcript via a `summary_of` relation
 
 A bundled skill (`skill:view basic-memory:basic-memory`) gives the agent a longer reference doc on top of the always-on `system_prompt_block`.
+
+## Slash commands
+
+For direct, in-session use without going through the agent (requires Hermes ≥ v0.11.0):
+
+| Command | Use |
+|---|---|
+| `/bm-search <query>` | Search the knowledge graph; returns compact title/permalink/preview rows. |
+| `/bm-read <identifier>` | Read a note by title, permalink, or `memory://` URL. |
+| `/bm-context <identifier>` | Build context for a note (target + related). |
+| `/bm-recent [timeframe]` | Recently updated notes. Default `7d`; accepts `"2 weeks"`, `"yesterday"`, etc. |
+| `/bm-status` | Plugin/provider state: mode, project, capture flags, bm CLI path. |
+| `/bm-remember <text>` | Capture a quick note. Title = first line (≤80 chars), folder = `remember_folder` (default `bm-remember`), tagged `manual-capture`. |
+| `/bm-project` | List all known projects; the active one is marked. |
+| `/bm-workspace` | List BM Cloud workspaces. Cloud mode only — prints an explanatory line in local mode. |
+
+Examples:
+
+```text
+/bm-search Q3 OKRs
+/bm-read decisions/auth-rewrite
+/bm-recent yesterday
+/bm-remember Reminder: switch the staging job to the new image after the rebase lands.
+```
+
+`/bm-project` and `/bm-workspace` are read-only in 0.2.0 — mid-session switching is intentionally not supported because auto-capture would otherwise land in the wrong place. Tracked as a follow-up.
 
 ## Configuration
 
@@ -77,6 +104,7 @@ Defaults are reasonable for local use:
 | `capture_folder` | `hermes-sessions` | Folder within the project for session notes |
 | `capture_per_turn` | `true` | Append every turn to a session transcript |
 | `capture_session_end` | `true` | Write a summary note when the session ends |
+| `remember_folder` | `bm-remember` | Folder where `/bm-remember` captures land (kept separate from session transcripts) |
 
 To override, write `~/.hermes/basic-memory.json` or run `hermes memory setup basic-memory`:
 
@@ -87,7 +115,8 @@ To override, write `~/.hermes/basic-memory.json` or run `hermes memory setup bas
   "project_path": "~/hermes-memory/",
   "capture_per_turn": true,
   "capture_session_end": true,
-  "capture_folder": "hermes-sessions"
+  "capture_folder": "hermes-sessions",
+  "remember_folder": "bm-remember"
 }
 ```
 
