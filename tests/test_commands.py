@@ -2,18 +2,87 @@
 Tests for the plugin-owned /bm-* slash commands.
 
 Covers:
-- registration through ctx.register_command (with hasattr fallback)
+- registration through ctx.register_command (forward-compat path)
+- PluginManager reach-in (production path with current Hermes collector)
 - per-handler behavior: usage text, uninitialized provider, happy path,
   and exception → plain-text error.
 """
 from __future__ import annotations
 
 import json
+import sys
+import types
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 from .conftest import FakeSession, make_scripted_actor
+
+
+# ---------------------------------------------------------------------------
+# Helpers for the reach-in tests
+# ---------------------------------------------------------------------------
+
+
+class _ProviderCollectorLike:
+    """
+    Mirror of Hermes's real `_ProviderCollector` shape: captures
+    `register_memory_provider` and no-ops everything else. NOT a MagicMock —
+    `hasattr(collector, "register_command")` must return False, matching the
+    real collector.
+    """
+
+    def __init__(self):
+        self.provider = None
+
+    def register_memory_provider(self, provider):
+        self.provider = provider
+
+
+class _FakePluginManager:
+    """Stand-in for hermes_cli.plugins.PluginManager — just the bits we touch."""
+
+    def __init__(self):
+        self._plugin_commands: dict = {}
+        self._plugin_skills: dict = {}
+
+
+def _install_fake_hermes_cli(monkeypatch, *, resolve_returns=None):
+    """
+    Insert a fake `hermes_cli.plugins` (with `_ensure_plugins_discovered`) and
+    `hermes_cli.commands` (with `resolve_command`) into sys.modules so the
+    reach-in's lazy imports resolve. Returns the FakePluginManager instance
+    so tests can assert against its registries.
+
+    resolve_returns: optional mapping of command name → truthy/falsy value
+    the fake resolve_command should return. Use a truthy value to simulate a
+    built-in conflict for that name.
+    """
+    fake_mgr = _FakePluginManager()
+
+    plugins_mod = types.ModuleType("hermes_cli.plugins")
+
+    def _ensure_plugins_discovered(force: bool = False):
+        return fake_mgr
+
+    plugins_mod._ensure_plugins_discovered = _ensure_plugins_discovered  # type: ignore[attr-defined]
+
+    commands_mod = types.ModuleType("hermes_cli.commands")
+
+    def _resolve_command(name: str):
+        if resolve_returns and name in resolve_returns:
+            return resolve_returns[name]
+        return None
+
+    commands_mod.resolve_command = _resolve_command  # type: ignore[attr-defined]
+
+    hermes_cli = types.ModuleType("hermes_cli")
+    monkeypatch.setitem(sys.modules, "hermes_cli", hermes_cli)
+    monkeypatch.setitem(sys.modules, "hermes_cli.plugins", plugins_mod)
+    monkeypatch.setitem(sys.modules, "hermes_cli.commands", commands_mod)
+
+    return fake_mgr
 
 
 # ---------------------------------------------------------------------------
@@ -32,7 +101,10 @@ _EXPECTED_COMMANDS = {
 }
 
 
-def test_register_wires_up_all_slash_commands(bm):
+def test_register_wires_up_all_slash_commands_on_modern_ctx(bm):
+    """Forward-compat path: when ctx supports register_command (e.g. after the
+    upstream collector patch lands, or for plugins loaded via PluginContext),
+    every /bm-* command is registered through that path."""
     ctx = MagicMock()
     bm._active_providers.clear()
     bm.register(ctx)
@@ -82,6 +154,146 @@ def test_register_swallows_register_command_errors(bm, caplog):
     assert ctx.register_command.call_count == len(_EXPECTED_COMMANDS)
     assert "register_command" in caplog.text
     bm._active_providers.clear()
+
+
+# ---------------------------------------------------------------------------
+# Reach-in (production path): ctx is the no-op _ProviderCollector
+# ---------------------------------------------------------------------------
+
+
+def test_reach_in_writes_all_commands_to_plugin_manager(bm, monkeypatch):
+    """Regression for Codex P1: with the real collector shape (no
+    register_command method), reach into PluginManager and write commands
+    directly. The unit suite previously used MagicMock, which masked this
+    silent-skip by making every attribute exist."""
+    fake_mgr = _install_fake_hermes_cli(monkeypatch)
+    ctx = _ProviderCollectorLike()
+    assert not hasattr(ctx, "register_command"), \
+        "test collector must mirror real _ProviderCollector — no register_command"
+
+    bm._active_providers.clear()
+    bm.register(ctx)
+    try:
+        assert ctx.provider is not None  # memory provider still registered
+        assert set(fake_mgr._plugin_commands.keys()) == _EXPECTED_COMMANDS
+        for name, entry in fake_mgr._plugin_commands.items():
+            assert callable(entry["handler"])
+            assert entry["plugin"] == "basic-memory"
+            assert "description" in entry
+            assert "args_hint" in entry
+    finally:
+        bm._active_providers.clear()
+
+
+def test_reach_in_writes_skill_to_plugin_manager(bm, monkeypatch):
+    """Same silent-skip applies to register_skill — the bundled skill never
+    landed in real installs prior to this fix. Reach-in writes the namespaced
+    entry directly."""
+    fake_mgr = _install_fake_hermes_cli(monkeypatch)
+    ctx = _ProviderCollectorLike()
+    bm._active_providers.clear()
+    bm.register(ctx)
+    try:
+        assert "basic-memory:basic-memory" in fake_mgr._plugin_skills
+        skill = fake_mgr._plugin_skills["basic-memory:basic-memory"]
+        assert skill["plugin"] == "basic-memory"
+        assert skill["bare_name"] == "basic-memory"
+        assert isinstance(skill["path"], Path)
+        assert skill["path"].name == "SKILL.md"
+    finally:
+        bm._active_providers.clear()
+
+
+def test_reach_in_skips_command_conflicting_with_builtin(bm, monkeypatch, caplog):
+    """Mirror Hermes's PluginContext.register_command guard — when
+    resolve_command(name) returns a truthy value, skip that command and
+    log a warning rather than overwriting a built-in."""
+    # Simulate /bm-search colliding with a built-in.
+    fake_mgr = _install_fake_hermes_cli(
+        monkeypatch, resolve_returns={"bm-search": object()}
+    )
+    ctx = _ProviderCollectorLike()
+    bm._active_providers.clear()
+    with caplog.at_level("WARNING"):
+        bm.register(ctx)
+    try:
+        assert "bm-search" not in fake_mgr._plugin_commands
+        # Other commands still landed
+        assert "bm-read" in fake_mgr._plugin_commands
+        assert "conflicts with a built-in" in caplog.text
+    finally:
+        bm._active_providers.clear()
+
+
+def test_reach_in_degrades_when_hermes_cli_missing(bm, monkeypatch, caplog):
+    """If hermes_cli.plugins isn't importable (e.g. running outside a Hermes
+    install), the reach-in must log and continue — never crash the plugin's
+    memory-provider registration."""
+    # Don't install fake modules; force import to fail.
+    monkeypatch.setitem(sys.modules, "hermes_cli.plugins", None)  # type: ignore[arg-type]
+    ctx = _ProviderCollectorLike()
+    bm._active_providers.clear()
+    with caplog.at_level("DEBUG"):
+        bm.register(ctx)  # must not raise
+    try:
+        assert ctx.provider is not None
+        # Either DEBUG message logged or nothing — both acceptable degrade modes.
+    finally:
+        bm._active_providers.clear()
+
+
+def test_reach_in_degrades_when_plugin_manager_missing_attrs(bm, monkeypatch):
+    """Forward-compat: if Hermes ever refactors _plugin_commands /
+    _plugin_skills away, the reach-in must not crash."""
+    fake_mgr = _FakePluginManager()
+    # Strip the attrs to simulate the rename/refactor
+    del fake_mgr._plugin_commands
+    del fake_mgr._plugin_skills
+
+    plugins_mod = types.ModuleType("hermes_cli.plugins")
+    plugins_mod._ensure_plugins_discovered = lambda force=False: fake_mgr  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "hermes_cli.plugins", plugins_mod)
+
+    ctx = _ProviderCollectorLike()
+    bm._active_providers.clear()
+    bm.register(ctx)  # must not raise
+    bm._active_providers.clear()
+
+
+def test_reach_in_normalizes_command_names(bm, monkeypatch):
+    """Reach-in must mirror Hermes's name normalization (lowercase, strip,
+    leading slash removed, spaces → hyphens). All our names are already
+    canonical, so this is a defensive check on the transform itself."""
+    fake_mgr = _install_fake_hermes_cli(monkeypatch)
+    ctx = _ProviderCollectorLike()
+    bm._active_providers.clear()
+    bm.register(ctx)
+    try:
+        for name in fake_mgr._plugin_commands:
+            assert name == name.lower()
+            assert not name.startswith("/")
+            assert " " not in name
+    finally:
+        bm._active_providers.clear()
+
+
+def test_reach_in_entries_match_hermes_internal_shape(bm, monkeypatch):
+    """The dict shape PluginContext.register_command writes
+    (plugins.py:447-452) is the contract Hermes's dispatch reads. Our
+    reach-in must produce byte-identical entries."""
+    fake_mgr = _install_fake_hermes_cli(monkeypatch)
+    ctx = _ProviderCollectorLike()
+    bm._active_providers.clear()
+    bm.register(ctx)
+    try:
+        entry = fake_mgr._plugin_commands["bm-search"]
+        assert set(entry.keys()) == {"handler", "description", "plugin", "args_hint"}
+        assert callable(entry["handler"])
+        assert entry["description"]  # non-empty string
+        assert entry["plugin"] == "basic-memory"
+        assert isinstance(entry["args_hint"], str)
+    finally:
+        bm._active_providers.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +483,28 @@ def test_bm_recent_custom_timeframe(bm):
         assert "2 weeks" in out
         assert "Recent thing" in out
         assert session.calls[-1][1]["timeframe"] == "2 weeks"
+    finally:
+        actor.shutdown()
+
+
+def test_bm_recent_bare_list_shape(bm):
+    """Regression: BM's `recent_activity(output_format="json")` returns a bare
+    `list[dict]` (signature: `-> str | list[dict]`), not a dict-with-results.
+    The handler must surface those rows, not report "no activity"."""
+    session = FakeSession()
+    session.stub(
+        "recent_activity",
+        lambda args: [
+            {"title": "Edited yesterday", "permalink": "notes/a", "content": "blob"},
+            {"title": "Edited 3d ago", "permalink": "notes/b"},
+        ],
+    )
+    provider, actor = _ready_provider(bm, session)
+    try:
+        out = _handlers_by_name(bm, provider)["bm-recent"]("")
+        assert "Edited yesterday" in out
+        assert "Edited 3d ago" in out
+        assert "No activity" not in out
     finally:
         actor.shutdown()
 

@@ -7,9 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [0.2.0] — 2026-05-11
 
 ### Added
-- **Plugin-owned `/bm-*` slash commands** for CLI/gateway sessions. Eight commands give humans direct memory-graph access without going through the agent: `/bm-search`, `/bm-read`, `/bm-context`, `/bm-recent`, `/bm-status`, `/bm-remember`, `/bm-project`, `/bm-workspace`. Registered via `ctx.register_command(...)` (Hermes ≥ v0.11.0); older Hermes installs silently skip the slash surface. Closes #2.
+- **Plugin-owned `/bm-*` slash commands** for CLI/gateway sessions. Eight commands give humans direct memory-graph access without going through the agent: `/bm-search`, `/bm-read`, `/bm-context`, `/bm-recent`, `/bm-status`, `/bm-remember`, `/bm-project`, `/bm-workspace`. Closes #2.
 - **`bm_recent` tool** wrapping BM's `recent_activity`. Surfaces notes updated within a timeframe (`7d` default, accepts natural language like `"2 weeks"` or `"yesterday"`). Agent-facing and reused by `/bm-recent`.
 - **`remember_folder` config key** (default `"bm-remember"`). Separate from `capture_folder` so manual captures via `/bm-remember` don't intermix with auto-generated session transcripts. Notes are tagged `manual-capture` for further disambiguation.
+
+### Fixed
+- **`ctx.register_skill(...)` was silently no-opping since 0.1.5** in real Hermes installs. Hermes loads memory-provider plugins through a stripped-down `_ProviderCollector` context (`plugins/memory/__init__.py`) that captures only `register_memory_provider`; `register_skill` and `register_command` are not delegated. The plugin now writes directly to `PluginManager._plugin_commands` and `_plugin_skills`, matching the entry shape and name normalization `PluginContext.register_command` / `register_skill` produce. This makes both the new slash commands and the bundled SKILL.md work in current Hermes installs. The clean fix lives upstream — a small patch to teach `_ProviderCollector` to delegate — and once that lands, the reach-in becomes a redundant double-write of identical entries. Forward-compat `ctx.register_command` / `ctx.register_skill` calls remain in place for the future code path.
 
 ### Notes
 - `/bm-remember` derives the title from the first non-empty line of the input, trimmed to 80 chars; falls back to `Note YYYY-MM-DD HHMM UTC`.

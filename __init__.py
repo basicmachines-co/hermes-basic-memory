@@ -1338,9 +1338,12 @@ def _build_slash_commands(
             return f"bm-recent: {e}"
         data = _unwrap_json_or_text(raw)
         results: List[Any] = []
-        if isinstance(data, dict):
-            # BM groups recent activity under several possible keys depending
-            # on version; check the common ones.
+        if isinstance(data, list):
+            # BM's recent_activity returns `list[dict]` in JSON mode — that's
+            # the documented signature (`-> str | list[dict]`).
+            results = data
+        elif isinstance(data, dict):
+            # Older BM versions or wrapping layers may bury the rows under a key.
             for key in ("results", "items", "activity", "primary_results"):
                 val = data.get(key)
                 if isinstance(val, list):
@@ -1500,6 +1503,113 @@ def _build_slash_commands(
 
 
 # ---------------------------------------------------------------------------
+# PluginManager reach-in — workaround for Hermes's memory-provider collector
+# ---------------------------------------------------------------------------
+#
+# Hermes loads memory-provider plugins through a stripped-down `_ProviderCollector`
+# context (plugins/memory/__init__.py) that only captures `register_memory_provider`;
+# `register_command` and `register_skill` are not delegated. The result is that
+# `ctx.register_command(...)` and `ctx.register_skill(...)` calls in this plugin
+# silently no-op in real installs, even though Hermes's PluginManager *does*
+# expose working slash-command and skill registries (used by general plugins).
+#
+# The clean fix lives upstream — a ~15-line patch to teach `_ProviderCollector`
+# to delegate to PluginManager. Until that lands, we write to PluginManager's
+# registries ourselves, matching exactly the entry shape and normalization
+# `PluginContext.register_command` / `register_skill` produce. Idempotent with
+# the future upstream fix: both code paths write identical entries to the same
+# dicts.
+#
+# Recursion is safe: PluginManager.discover_and_load is idempotent
+# (plugins.py:699) and explicitly skips memory-provider plugins at the
+# manifest-routing stage (plugins.py:792-802), so calling
+# `_ensure_plugins_discovered()` from inside our register() cannot re-enter us.
+
+_PLUGIN_MANIFEST_NAME = "basic-memory"
+
+_SKILL_DESCRIPTION = (
+    "Reference for using bm_* tools and the Basic Memory knowledge graph "
+    "(search-before-answer, capture decisions, navigate via memory:// URLs)."
+)
+
+
+def _register_via_plugin_manager(
+    provider: "BasicMemoryProvider",
+    skill_path: Optional[Path] = None,
+) -> None:
+    """
+    Reach into Hermes's PluginManager to register slash commands and the
+    bundled skill, bypassing the memory-provider collector's no-op stubs.
+
+    Best-effort: any failure (Hermes not on path, internal API renamed,
+    discovery errored) logs at debug/warning and degrades to "no slash
+    commands" rather than breaking memory-provider registration.
+    """
+    try:
+        from hermes_cli.plugins import _ensure_plugins_discovered
+    except Exception as e:
+        logger.debug(
+            "basic-memory: hermes_cli.plugins unavailable (%s); skipping "
+            "slash-command reach-in",
+            e,
+        )
+        return
+
+    try:
+        mgr = _ensure_plugins_discovered()
+    except Exception as e:
+        logger.warning("basic-memory: PluginManager discovery failed: %s", e)
+        return
+
+    # Mirror PluginContext.register_command's name-conflict guard against
+    # built-in commands. Best-effort: if the import path changed, skip the
+    # check rather than dropping every command.
+    try:
+        from hermes_cli.commands import resolve_command  # type: ignore
+    except Exception:
+        resolve_command = None  # type: ignore[assignment]
+
+    plugin_commands = getattr(mgr, "_plugin_commands", None)
+    if plugin_commands is None:
+        logger.debug(
+            "basic-memory: PluginManager has no _plugin_commands attr; "
+            "slash commands skipped"
+        )
+    else:
+        for name, handler, description, args_hint in _build_slash_commands(provider):
+            # Mirror Hermes's normalization (plugins.py:426).
+            clean = name.lower().strip().lstrip("/").replace(" ", "-")
+            if not clean:
+                continue
+            if resolve_command is not None:
+                try:
+                    if resolve_command(clean) is not None:
+                        logger.warning(
+                            "basic-memory: skipping /%s — conflicts with "
+                            "a built-in command",
+                            clean,
+                        )
+                        continue
+                except Exception:
+                    pass
+            plugin_commands[clean] = {
+                "handler": handler,
+                "description": description or "Plugin command",
+                "plugin": _PLUGIN_MANIFEST_NAME,
+                "args_hint": (args_hint or "").strip(),
+            }
+
+    plugin_skills = getattr(mgr, "_plugin_skills", None)
+    if plugin_skills is not None and skill_path is not None and skill_path.exists():
+        plugin_skills[f"{_PLUGIN_MANIFEST_NAME}:basic-memory"] = {
+            "path": skill_path,
+            "plugin": _PLUGIN_MANIFEST_NAME,
+            "bare_name": "basic-memory",
+            "description": _SKILL_DESCRIPTION,
+        }
+
+
+# ---------------------------------------------------------------------------
 # atexit safety net (mirrors plugins/memory/openviking pattern)
 # ---------------------------------------------------------------------------
 
@@ -1534,22 +1644,23 @@ def register(ctx: Any) -> None:
     # through `system_prompt_block()`.
     skill_path = Path(__file__).resolve().parent / "skill" / "SKILL.md"
     if skill_path.exists() and hasattr(ctx, "register_skill"):
+        # Forward-compat: if Hermes's memory-provider collector ever delegates
+        # register_skill to PluginManager (or another loader passes us a real
+        # PluginContext), this lands the skill via the supported path. The
+        # reach-in below covers the current production collector either way.
         try:
             ctx.register_skill(
                 "basic-memory",
                 skill_path,
-                description=(
-                    "Reference for using bm_* tools and the Basic Memory "
-                    "knowledge graph (search-before-answer, capture decisions, "
-                    "navigate via memory:// URLs)."
-                ),
+                description=_SKILL_DESCRIPTION,
             )
         except Exception as e:
             logger.warning("basic-memory: register_skill failed: %s", e)
 
-    # Plugin-owned /bm-* slash commands. register_command landed in Hermes
-    # v0.11.0; the hasattr guard keeps older Hermes installs working — they
-    # just don't get the slash-command surface.
+    # Forward-compat: when Hermes's memory-provider collector gains
+    # register_command (PR to NousResearch/hermes-agent pending), this is the
+    # right path. Until then, hasattr returns False and we fall through to
+    # the reach-in below.
     if hasattr(ctx, "register_command"):
         for name, handler, description, args_hint in _build_slash_commands(provider):
             try:
@@ -1563,3 +1674,10 @@ def register(ctx: Any) -> None:
                 logger.warning(
                     "basic-memory: register_command(%s) failed: %s", name, e
                 )
+
+    # Write directly to PluginManager's registries. This is the production
+    # path today; see _register_via_plugin_manager docstring for the why.
+    _register_via_plugin_manager(
+        provider,
+        skill_path=skill_path if skill_path.exists() else None,
+    )
