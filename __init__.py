@@ -72,6 +72,7 @@ _HERMES_TO_BM: Dict[str, str] = {
     "bm_context": "build_context",
     "bm_delete": "delete_note",
     "bm_move": "move_note",
+    "bm_recent": "recent_activity",
 }
 
 TOOL_SCHEMAS: List[Dict[str, Any]] = [
@@ -173,6 +174,28 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                 "new_folder": {"type": "string"},
             },
             "required": ["identifier", "new_folder"],
+        },
+    },
+    {
+        "name": "bm_recent",
+        "description": (
+            "List notes updated recently. Use to surface what's been touched "
+            "without a specific search query."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "timeframe": {
+                    "type": "string",
+                    "description": "Lookback window. Accepts '7d', '2 weeks', 'yesterday', etc.",
+                    "default": "7d",
+                },
+                "limit": {"type": "integer", "description": "Max results (default 10).", "default": 10},
+                "type": {
+                    "type": "string",
+                    "description": "Optional filter by item type (e.g. 'entity', 'observation').",
+                },
+            },
         },
     },
 ]
@@ -588,6 +611,13 @@ def _translate_args(
     elif hermes_tool == "bm_move":
         out["identifier"] = args["identifier"]
         out["destination_folder"] = args["new_folder"]
+    elif hermes_tool == "bm_recent":
+        if args.get("timeframe"):
+            out["timeframe"] = str(args["timeframe"])
+        if args.get("limit") is not None:
+            out["page_size"] = int(args["limit"])
+        if args.get("type"):
+            out["type"] = args["type"]
     return bm_tool, out
 
 
@@ -799,7 +829,9 @@ class BasicMemoryProvider(MemoryProvider):
             "- `bm_edit(identifier, operation, content)` — append, prepend, "
             "find_replace, replace_section\n"
             "- `bm_delete(identifier)` / `bm_move(identifier, new_folder)` — "
-            "maintenance"
+            "maintenance\n"
+            "- `bm_recent(timeframe)` — list notes updated within a window "
+            "(default 7d) when there's no specific query yet"
         )
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
