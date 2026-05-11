@@ -270,6 +270,27 @@ def test_translate_move(bm):
     }
 
 
+def test_translate_recent_defaults(bm):
+    tool, args = bm._translate_args("bm_recent", {}, "proj")
+    assert tool == "recent_activity"
+    assert args == {"project": "proj"}
+
+
+def test_translate_recent_full(bm):
+    tool, args = bm._translate_args(
+        "bm_recent",
+        {"timeframe": "2 weeks", "limit": 25, "type": "entity"},
+        "proj",
+    )
+    assert tool == "recent_activity"
+    assert args == {
+        "project": "proj",
+        "timeframe": "2 weeks",
+        "page_size": 25,
+        "type": "entity",
+    }
+
+
 # ---- _default_project / _hostname ----
 
 def test_default_project_format(bm):
@@ -289,7 +310,7 @@ def test_hostname_lowercased(bm, monkeypatch):
 def test_tool_schemas_complete(bm):
     names = {s["name"] for s in bm.TOOL_SCHEMAS}
     expected = {"bm_search", "bm_read", "bm_write", "bm_edit",
-                "bm_context", "bm_delete", "bm_move"}
+                "bm_context", "bm_delete", "bm_move", "bm_recent"}
     assert names == expected
 
 

@@ -31,14 +31,14 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from shutil import which
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # Hermes ABC + helpers — these resolve because Hermes adds its tree to sys.path
 # when loading plugins (same pattern as plugins/memory/mem0/__init__.py:21).
 from agent.memory_provider import MemoryProvider
 from tools.registry import tool_error
 
-__version__ = "0.1.7"
+__version__ = "0.2.0"
 
 logger = logging.getLogger("hermes.memory.basic-memory")
 
@@ -72,6 +72,7 @@ _HERMES_TO_BM: Dict[str, str] = {
     "bm_context": "build_context",
     "bm_delete": "delete_note",
     "bm_move": "move_note",
+    "bm_recent": "recent_activity",
 }
 
 TOOL_SCHEMAS: List[Dict[str, Any]] = [
@@ -173,6 +174,28 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                 "new_folder": {"type": "string"},
             },
             "required": ["identifier", "new_folder"],
+        },
+    },
+    {
+        "name": "bm_recent",
+        "description": (
+            "List notes updated recently. Use to surface what's been touched "
+            "without a specific search query."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "timeframe": {
+                    "type": "string",
+                    "description": "Lookback window. Accepts '7d', '2 weeks', 'yesterday', etc.",
+                    "default": "7d",
+                },
+                "limit": {"type": "integer", "description": "Max results (default 10).", "default": 10},
+                "type": {
+                    "type": "string",
+                    "description": "Optional filter by item type (e.g. 'entity', 'observation').",
+                },
+            },
         },
     },
 ]
@@ -588,6 +611,13 @@ def _translate_args(
     elif hermes_tool == "bm_move":
         out["identifier"] = args["identifier"]
         out["destination_folder"] = args["new_folder"]
+    elif hermes_tool == "bm_recent":
+        if args.get("timeframe"):
+            out["timeframe"] = str(args["timeframe"])
+        if args.get("limit") is not None:
+            out["page_size"] = int(args["limit"])
+        if args.get("type"):
+            out["type"] = args["type"]
     return bm_tool, out
 
 
@@ -606,6 +636,7 @@ class BasicMemoryProvider(MemoryProvider):
         self._capture_per_turn: bool = True
         self._capture_session_end: bool = True
         self._capture_folder: str = "hermes-sessions"
+        self._remember_folder: str = "bm-remember"
         self._session_id: str = ""
         self._hermes_home: str = ""
         self._session_note_id: Optional[str] = None
@@ -649,6 +680,7 @@ class BasicMemoryProvider(MemoryProvider):
         self._capture_per_turn = bool(_coerce_bool(cfg.get("capture_per_turn", True)))
         self._capture_session_end = bool(_coerce_bool(cfg.get("capture_session_end", True)))
         self._capture_folder = cfg.get("capture_folder") or "hermes-sessions"
+        self._remember_folder = cfg.get("remember_folder") or "bm-remember"
 
         # Bootstrap-install bm via uv if it's not already on disk. One-time cost
         # on a fresh machine; idempotent no-op once basic-memory is installed.
@@ -799,7 +831,9 @@ class BasicMemoryProvider(MemoryProvider):
             "- `bm_edit(identifier, operation, content)` — append, prepend, "
             "find_replace, replace_section\n"
             "- `bm_delete(identifier)` / `bm_move(identifier, new_folder)` — "
-            "maintenance"
+            "maintenance\n"
+            "- `bm_recent(timeframe)` — list notes updated within a window "
+            "(default 7d) when there's no specific query yet"
         )
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
@@ -1082,6 +1116,11 @@ class BasicMemoryProvider(MemoryProvider):
                 "description": "BM folder where session notes land",
                 "default": "hermes-sessions",
             },
+            {
+                "key": "remember_folder",
+                "description": "BM folder where /bm-remember captures land",
+                "default": "bm-remember",
+            },
         ]
 
     def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
@@ -1115,6 +1154,459 @@ class BasicMemoryProvider(MemoryProvider):
             self._failure_count = 0
             self._failure_pause_until = 0.0
         return False
+
+
+# ---------------------------------------------------------------------------
+# Slash commands — /bm-* surface for CLI/gateway sessions
+# ---------------------------------------------------------------------------
+#
+# Plugin-owned slash commands let humans run BM operations without going
+# through the agent. Handlers are sync `(raw_args: str) -> str` closures over
+# a provider instance; output is printed verbatim by Hermes. We catch our own
+# exceptions and return a plain-text message — Hermes also catches but yields
+# a generic "Plugin command error: ..." line that hides detail from the user.
+
+
+_SLASH_USAGE: Dict[str, str] = {
+    "bm-search":    "Usage: /bm-search <query>\nSearch the Basic Memory knowledge graph.",
+    "bm-read":      "Usage: /bm-read <title|permalink|memory:// URL>",
+    "bm-context":   "Usage: /bm-context <identifier or memory:// URL>",
+    "bm-recent":    "Usage: /bm-recent [timeframe]   (default: 7d. Accepts '2 weeks', 'yesterday', etc.)",
+    "bm-status":    "Usage: /bm-status",
+    "bm-remember":  "Usage: /bm-remember <text>\nCapture a note. First line becomes the title.",
+    "bm-project":   "Usage: /bm-project   (lists Basic Memory projects; active one marked)",
+    "bm-workspace": "Usage: /bm-workspace   (lists Basic Memory Cloud workspaces; cloud mode only)",
+}
+
+
+def _is_help_arg(raw_args: str) -> bool:
+    s = raw_args.strip()
+    return s in ("help", "-h", "--help", "?")
+
+
+def _unwrap_json_or_text(raw: str) -> Any:
+    """
+    Best-effort decode of a tool result. Returns:
+      - the inner JSON if `raw` parses to JSON (and unwraps {"text": "..."} when
+        the inner string is also JSON)
+      - the raw string otherwise
+    """
+    if not isinstance(raw, str) or not raw:
+        return raw
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return raw
+    if isinstance(data, dict) and "text" in data and isinstance(data["text"], str):
+        inner = data["text"]
+        try:
+            inner_data = json.loads(inner)
+            return inner_data
+        except Exception:
+            return inner
+    return data
+
+
+def _format_result_rows(items: List[Any], header: str, empty_msg: str) -> str:
+    if not items:
+        return empty_msg
+    lines = [header]
+    for r in items:
+        if not isinstance(r, dict):
+            continue
+        title = str(r.get("title") or r.get("name") or "(untitled)")
+        permalink = str(r.get("permalink") or r.get("path") or "")
+        preview_raw = r.get("content") or r.get("preview") or r.get("snippet") or ""
+        if not isinstance(preview_raw, str):
+            preview_raw = str(preview_raw)
+        preview = re.sub(r"\s+", " ", preview_raw)[:200].strip()
+        bits = [f"- {title}"]
+        if permalink:
+            bits.append(f"({permalink})")
+        if preview:
+            bits.append(f"— {preview}")
+        lines.append(" ".join(bits))
+    return "\n".join(lines)
+
+
+def _slash_uninit(cmd: str) -> str:
+    return f"{cmd}: basic-memory provider not initialized. Run `hermes memory status` to diagnose."
+
+
+def _remember_title(text: str) -> str:
+    """Derive a note title from free-form text. First non-empty line, ≤80 chars."""
+    for line in text.splitlines():
+        line = line.strip().lstrip("#").strip()
+        if line:
+            return line[:80]
+    # Fallback: timestamp
+    return "Note " + datetime.now(timezone.utc).strftime("%Y-%m-%d %H%M UTC")
+
+
+def _build_slash_commands(
+    provider: "BasicMemoryProvider",
+) -> List[Tuple[str, Callable[[str], str], str, str]]:
+    """
+    Return (name, handler, description, args_hint) tuples for each /bm-* command.
+    Handlers close over `provider` to access the live actor and config.
+    """
+
+    def _bm_search(raw_args: str) -> str:
+        args = raw_args.strip()
+        if not args or _is_help_arg(args):
+            return _SLASH_USAGE["bm-search"]
+        if not provider._initialized or provider._actor is None:
+            return _slash_uninit("bm-search")
+        try:
+            raw = provider._actor.call(
+                "search_notes",
+                {
+                    "project": provider._project,
+                    "query": args,
+                    "page_size": 10,
+                    "output_format": "json",
+                },
+                timeout=15.0,
+            )
+        except Exception as e:
+            return f"bm-search: {e}"
+        data = _unwrap_json_or_text(raw)
+        results = data.get("results") if isinstance(data, dict) else None
+        return _format_result_rows(
+            list(results or []),
+            header=f"Basic Memory results for {args!r}:",
+            empty_msg=f"No results for {args!r}.",
+        )
+
+    def _bm_read(raw_args: str) -> str:
+        args = raw_args.strip()
+        if not args or _is_help_arg(args):
+            return _SLASH_USAGE["bm-read"]
+        if not provider._initialized or provider._actor is None:
+            return _slash_uninit("bm-read")
+        try:
+            raw = provider._actor.call(
+                "read_note",
+                {"project": provider._project, "identifier": args},
+                timeout=15.0,
+            )
+        except Exception as e:
+            return f"bm-read: {e}"
+        body = _unwrap_json_or_text(raw)
+        if isinstance(body, dict) and "error" in body:
+            return f"bm-read: {body['error']}"
+        return body if isinstance(body, str) else json.dumps(body, indent=2)
+
+    def _bm_context(raw_args: str) -> str:
+        args = raw_args.strip()
+        if not args or _is_help_arg(args):
+            return _SLASH_USAGE["bm-context"]
+        if not provider._initialized or provider._actor is None:
+            return _slash_uninit("bm-context")
+        try:
+            raw = provider._actor.call(
+                "build_context",
+                {"project": provider._project, "url": args, "depth": 1},
+                timeout=15.0,
+            )
+        except Exception as e:
+            return f"bm-context: {e}"
+        body = _unwrap_json_or_text(raw)
+        if isinstance(body, dict) and "error" in body:
+            return f"bm-context: {body['error']}"
+        return body if isinstance(body, str) else json.dumps(body, indent=2)
+
+    def _bm_recent(raw_args: str) -> str:
+        args = raw_args.strip()
+        if _is_help_arg(args):
+            return _SLASH_USAGE["bm-recent"]
+        timeframe = args or "7d"
+        if not provider._initialized or provider._actor is None:
+            return _slash_uninit("bm-recent")
+        try:
+            raw = provider._actor.call(
+                "recent_activity",
+                {
+                    "project": provider._project,
+                    "timeframe": timeframe,
+                    "page_size": 10,
+                    "output_format": "json",
+                },
+                timeout=15.0,
+            )
+        except Exception as e:
+            return f"bm-recent: {e}"
+        data = _unwrap_json_or_text(raw)
+        results: List[Any] = []
+        if isinstance(data, list):
+            # BM's recent_activity returns `list[dict]` in JSON mode — that's
+            # the documented signature (`-> str | list[dict]`).
+            results = data
+        elif isinstance(data, dict):
+            # Older BM versions or wrapping layers may bury the rows under a key.
+            for key in ("results", "items", "activity", "primary_results"):
+                val = data.get(key)
+                if isinstance(val, list):
+                    results = val
+                    break
+        return _format_result_rows(
+            results,
+            header=f"Basic Memory activity ({timeframe}):",
+            empty_msg=f"No activity in the last {timeframe}.",
+        )
+
+    def _bm_status(raw_args: str) -> str:
+        if _is_help_arg(raw_args):
+            return _SLASH_USAGE["bm-status"]
+        lines = [
+            "Basic Memory plugin status",
+            f"  Provider:    {provider.name}",
+            f"  Mode:        {provider._mode}",
+            f"  Project:     {provider._project}",
+        ]
+        if provider._mode == "local":
+            lines.append(f"  Path:        {provider._project_path}")
+        bm_bin = _bm_binary_path()
+        lines.append(f"  bm CLI:      {bm_bin or '(not found)'}")
+        lines.append(f"  MCP module:  {'available' if _MCP_AVAILABLE else 'missing'}")
+        lines.append(f"  Initialized: {'yes' if provider._initialized else 'no'}")
+        lines.append(
+            f"  Capture:     per-turn={provider._capture_per_turn}, "
+            f"session-end={provider._capture_session_end}, "
+            f"folder={provider._capture_folder!r}"
+        )
+        lines.append(f"  Remember folder: {provider._remember_folder!r}")
+        if provider._failure_count:
+            circuit = "open" if provider._is_circuit_open() else "closed"
+            lines.append(f"  Failures:    {provider._failure_count} (circuit {circuit})")
+        return "\n".join(lines)
+
+    def _bm_remember(raw_args: str) -> str:
+        text = raw_args.strip()
+        if not text or _is_help_arg(text):
+            return _SLASH_USAGE["bm-remember"]
+        if not provider._initialized or provider._actor is None:
+            return _slash_uninit("bm-remember")
+        title = _remember_title(text)
+        folder = provider._remember_folder or "bm-remember"
+        try:
+            raw = provider._actor.call(
+                "write_note",
+                {
+                    "project": provider._project,
+                    "title": title,
+                    "directory": folder,
+                    "content": text,
+                    "tags": ["manual-capture", _hostname()],
+                    "output_format": "json",
+                },
+                timeout=15.0,
+            )
+        except Exception as e:
+            return f"bm-remember: {e}"
+        permalink = _extract_permalink(raw, fallback=title)
+        return f"Saved: {title}\n  Folder:    {folder}\n  Permalink: {permalink}"
+
+    def _bm_project(raw_args: str) -> str:
+        if _is_help_arg(raw_args):
+            return _SLASH_USAGE["bm-project"]
+        if not provider._initialized or provider._actor is None:
+            return _slash_uninit("bm-project")
+        try:
+            raw = provider._actor.call(
+                "list_memory_projects",
+                {"output_format": "json"},
+                timeout=15.0,
+            )
+        except Exception as e:
+            return f"bm-project: {e}"
+        data = _unwrap_json_or_text(raw)
+        projects: List[Any] = []
+        if isinstance(data, dict):
+            for key in ("projects", "results", "items"):
+                val = data.get(key)
+                if isinstance(val, list):
+                    projects = val
+                    break
+        if not projects and isinstance(data, list):
+            projects = data
+        if not projects:
+            return "No Basic Memory projects found."
+        lines = ["Basic Memory projects:"]
+        for p in projects:
+            if isinstance(p, dict):
+                name = str(p.get("name") or p.get("permalink") or "(unnamed)")
+                src = p.get("source") or p.get("workspace") or ""
+            else:
+                name, src = str(p), ""
+            marker = "  (active)" if name == provider._project else ""
+            tag = f" [{src}]" if src else ""
+            lines.append(f"- {name}{tag}{marker}")
+        return "\n".join(lines)
+
+    def _bm_workspace(raw_args: str) -> str:
+        if _is_help_arg(raw_args):
+            return _SLASH_USAGE["bm-workspace"]
+        if provider._mode != "cloud":
+            return (
+                "Workspaces are a Basic Memory Cloud concept. "
+                f"This plugin is in '{provider._mode}' mode — no workspaces to list."
+            )
+        if not provider._initialized or provider._actor is None:
+            return _slash_uninit("bm-workspace")
+        try:
+            raw = provider._actor.call(
+                "list_workspaces",
+                {"output_format": "json"},
+                timeout=15.0,
+            )
+        except Exception as e:
+            return f"bm-workspace: {e}"
+        data = _unwrap_json_or_text(raw)
+        workspaces: List[Any] = []
+        if isinstance(data, dict):
+            for key in ("workspaces", "results", "items"):
+                val = data.get(key)
+                if isinstance(val, list):
+                    workspaces = val
+                    break
+        if not workspaces:
+            return "No Basic Memory Cloud workspaces found."
+        lines = ["Basic Memory Cloud workspaces:"]
+        for w in workspaces:
+            if isinstance(w, dict):
+                name = str(w.get("name") or w.get("slug") or "(unnamed)")
+                wtype = w.get("workspace_type") or ""
+                role = w.get("role") or ""
+                is_default = bool(w.get("is_default"))
+            else:
+                name, wtype, role, is_default = str(w), "", "", False
+            bits = [f"- {name}"]
+            tag_parts = [x for x in (wtype, role) if x]
+            if tag_parts:
+                bits.append(f"[{' / '.join(tag_parts)}]")
+            if is_default:
+                bits.append("(default)")
+            lines.append(" ".join(bits))
+        return "\n".join(lines)
+
+    return [
+        ("bm-search",    _bm_search,    "Search Basic Memory.",                      "<query>"),
+        ("bm-read",      _bm_read,      "Read a Basic Memory note.",                 "<identifier>"),
+        ("bm-context",   _bm_context,   "Show context graph for a Basic Memory note.", "<identifier>"),
+        ("bm-recent",    _bm_recent,    "Show recent Basic Memory activity.",        "[timeframe]"),
+        ("bm-status",    _bm_status,    "Show the Basic Memory plugin status.",      ""),
+        ("bm-remember",  _bm_remember,  "Save a quick note to Basic Memory.",        "<text>"),
+        ("bm-project",   _bm_project,   "List Basic Memory projects.",               ""),
+        ("bm-workspace", _bm_workspace, "List Basic Memory Cloud workspaces.",       ""),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# PluginManager reach-in — workaround for Hermes's memory-provider collector
+# ---------------------------------------------------------------------------
+#
+# Hermes loads memory-provider plugins through a stripped-down `_ProviderCollector`
+# context (plugins/memory/__init__.py) that only captures `register_memory_provider`;
+# `register_command` and `register_skill` are not delegated. The result is that
+# `ctx.register_command(...)` and `ctx.register_skill(...)` calls in this plugin
+# silently no-op in real installs, even though Hermes's PluginManager *does*
+# expose working slash-command and skill registries (used by general plugins).
+#
+# The clean fix lives upstream — a ~15-line patch to teach `_ProviderCollector`
+# to delegate to PluginManager. Until that lands, we write to PluginManager's
+# registries ourselves, matching exactly the entry shape and normalization
+# `PluginContext.register_command` / `register_skill` produce. Idempotent with
+# the future upstream fix: both code paths write identical entries to the same
+# dicts.
+#
+# Recursion is safe: PluginManager.discover_and_load is idempotent
+# (plugins.py:699) and explicitly skips memory-provider plugins at the
+# manifest-routing stage (plugins.py:792-802), so calling
+# `_ensure_plugins_discovered()` from inside our register() cannot re-enter us.
+
+_PLUGIN_MANIFEST_NAME = "basic-memory"
+
+_SKILL_DESCRIPTION = (
+    "Reference for using bm_* tools and the Basic Memory knowledge graph "
+    "(search-before-answer, capture decisions, navigate via memory:// URLs)."
+)
+
+
+def _register_via_plugin_manager(
+    provider: "BasicMemoryProvider",
+    skill_path: Optional[Path] = None,
+) -> None:
+    """
+    Reach into Hermes's PluginManager to register slash commands and the
+    bundled skill, bypassing the memory-provider collector's no-op stubs.
+
+    Best-effort: any failure (Hermes not on path, internal API renamed,
+    discovery errored) logs at debug/warning and degrades to "no slash
+    commands" rather than breaking memory-provider registration.
+    """
+    try:
+        from hermes_cli.plugins import _ensure_plugins_discovered
+    except Exception as e:
+        logger.debug(
+            "basic-memory: hermes_cli.plugins unavailable (%s); skipping "
+            "slash-command reach-in",
+            e,
+        )
+        return
+
+    try:
+        mgr = _ensure_plugins_discovered()
+    except Exception as e:
+        logger.warning("basic-memory: PluginManager discovery failed: %s", e)
+        return
+
+    # Mirror PluginContext.register_command's name-conflict guard against
+    # built-in commands. Best-effort: if the import path changed, skip the
+    # check rather than dropping every command.
+    try:
+        from hermes_cli.commands import resolve_command  # type: ignore
+    except Exception:
+        resolve_command = None  # type: ignore[assignment]
+
+    plugin_commands = getattr(mgr, "_plugin_commands", None)
+    if plugin_commands is None:
+        logger.debug(
+            "basic-memory: PluginManager has no _plugin_commands attr; "
+            "slash commands skipped"
+        )
+    else:
+        for name, handler, description, args_hint in _build_slash_commands(provider):
+            # Mirror Hermes's normalization (plugins.py:426).
+            clean = name.lower().strip().lstrip("/").replace(" ", "-")
+            if not clean:
+                continue
+            if resolve_command is not None:
+                try:
+                    if resolve_command(clean) is not None:
+                        logger.warning(
+                            "basic-memory: skipping /%s — conflicts with "
+                            "a built-in command",
+                            clean,
+                        )
+                        continue
+                except Exception:
+                    pass
+            plugin_commands[clean] = {
+                "handler": handler,
+                "description": description or "Plugin command",
+                "plugin": _PLUGIN_MANIFEST_NAME,
+                "args_hint": (args_hint or "").strip(),
+            }
+
+    plugin_skills = getattr(mgr, "_plugin_skills", None)
+    if plugin_skills is not None and skill_path is not None and skill_path.exists():
+        plugin_skills[f"{_PLUGIN_MANIFEST_NAME}:basic-memory"] = {
+            "path": skill_path,
+            "plugin": _PLUGIN_MANIFEST_NAME,
+            "bare_name": "basic-memory",
+            "description": _SKILL_DESCRIPTION,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -1152,15 +1644,40 @@ def register(ctx: Any) -> None:
     # through `system_prompt_block()`.
     skill_path = Path(__file__).resolve().parent / "skill" / "SKILL.md"
     if skill_path.exists() and hasattr(ctx, "register_skill"):
+        # Forward-compat: if Hermes's memory-provider collector ever delegates
+        # register_skill to PluginManager (or another loader passes us a real
+        # PluginContext), this lands the skill via the supported path. The
+        # reach-in below covers the current production collector either way.
         try:
             ctx.register_skill(
                 "basic-memory",
                 skill_path,
-                description=(
-                    "Reference for using bm_* tools and the Basic Memory "
-                    "knowledge graph (search-before-answer, capture decisions, "
-                    "navigate via memory:// URLs)."
-                ),
+                description=_SKILL_DESCRIPTION,
             )
         except Exception as e:
             logger.warning("basic-memory: register_skill failed: %s", e)
+
+    # Forward-compat: when Hermes's memory-provider collector gains
+    # register_command (PR to NousResearch/hermes-agent pending), this is the
+    # right path. Until then, hasattr returns False and we fall through to
+    # the reach-in below.
+    if hasattr(ctx, "register_command"):
+        for name, handler, description, args_hint in _build_slash_commands(provider):
+            try:
+                ctx.register_command(
+                    name,
+                    handler,
+                    description=description,
+                    args_hint=args_hint,
+                )
+            except Exception as e:
+                logger.warning(
+                    "basic-memory: register_command(%s) failed: %s", name, e
+                )
+
+    # Write directly to PluginManager's registries. This is the production
+    # path today; see _register_via_plugin_manager docstring for the why.
+    _register_via_plugin_manager(
+        provider,
+        skill_path=skill_path if skill_path.exists() else None,
+    )
