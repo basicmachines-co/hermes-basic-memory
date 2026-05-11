@@ -3,8 +3,12 @@ name: release
 # Manual trigger: Actions → release → Run workflow. Always runs against main
 # (the workflow validates GITHUB_REF). Steps:
 #   1. Compute the new version from the `version` input (patch/minor/major
-#      or explicit semver). The current version is read from __init__.py.
-#   2. Update __version__ in __init__.py and version in plugin.yaml.
+#      or explicit semver). The *current* version is read from the latest
+#      git tag (`v*.*.*`) — NOT from __init__.py. This is robust to PRs that
+#      pre-bump __init__.py: the bump always runs from the last released
+#      version, not from whatever the working files happen to say.
+#   2. Update __version__ in __init__.py and version in plugin.yaml to match
+#      the new tag — bringing the files in sync if a PR pre-bumped them.
 #   3. Commit as `chore(release): vX.Y.Z`, tag, push to main + push the tag.
 #   4. Publish a GitHub Release. Body is the matching `## [X.Y.Z]` block from
 #      CHANGELOG.md when present; otherwise auto-generated release notes.
@@ -50,14 +54,21 @@ jobs:
           set -euo pipefail
           VERSION_INPUT="${{ github.event.inputs.version }}"
 
-          # Source of truth for the current version is __init__.py.
-          CURRENT=$(grep -E '^__version__ = ' __init__.py \
-            | sed -E 's/^__version__ = "([^"]+)".*/\1/')
-          if [ -z "$CURRENT" ]; then
-            echo "::error::Could not read __version__ from __init__.py"
-            exit 1
+          # Current = latest released tag (sort by version, descending; pick
+          # the first v*.*.* tag). NOT __init__.py — a PR may have pre-bumped
+          # the version files, and we don't want to double-bump on top of
+          # that. The bump is computed from the last *released* version.
+          LAST_TAG=$(git tag --list 'v*.*.*' --sort=-v:refname | head -1 || true)
+          if [ -z "$LAST_TAG" ]; then
+            # First release in the repo. Seed with 0.0.0 so a `patch` bump
+            # yields v0.0.1, `minor` yields v0.1.0, `major` yields v1.0.0.
+            # Explicit semver inputs bypass the seed entirely.
+            CURRENT="0.0.0"
+            echo "No prior v*.*.* tag found; seeding current=0.0.0"
+          else
+            CURRENT="${LAST_TAG#v}"
+            echo "Latest released tag: $LAST_TAG (current=$CURRENT)"
           fi
-          echo "Current version: $CURRENT"
 
           if [[ "$VERSION_INPUT" =~ ^(patch|minor|major)$ ]]; then
             IFS=. read -r MAJ MIN PAT <<< "$CURRENT"
@@ -76,7 +87,19 @@ jobs:
           fi
 
           if [ "$NEW" = "$CURRENT" ]; then
-            echo "::error::New version equals current ($NEW). Pick a different version."
+            echo "::error::New version equals last released ($NEW). Pick a different version."
+            exit 1
+          fi
+
+          # Sanity check: refuse if __init__.py is already ahead of the
+          # version we're about to ship. Catches the "PR bumped to 0.5.0 but
+          # workflow was asked for a patch that would land 0.1.8" foot-gun
+          # before it overwrites the files.
+          FILE_VERSION=$(grep -E '^__version__ = ' __init__.py \
+            | sed -E 's/^__version__ = "([^"]+)".*/\1/')
+          if [ -n "$FILE_VERSION" ] && [ "$FILE_VERSION" != "$CURRENT" ] && [ "$FILE_VERSION" != "$NEW" ]; then
+            echo "::error::__init__.py reports version $FILE_VERSION, but the release would ship $NEW (last tag: $CURRENT)."
+            echo "::error::Reconcile by picking a version input that matches __init__.py, or roll __init__.py back to $CURRENT."
             exit 1
           fi
 
@@ -122,12 +145,19 @@ jobs:
           set -euo pipefail
           TAG="${{ steps.bump.outputs.tag }}"
           git add __init__.py plugin.yaml
-          git commit -m "chore(release): ${TAG}"
+          if git diff --cached --quiet; then
+            # PR already bumped the files to the target version. Tag the
+            # existing HEAD rather than creating an empty release commit.
+            echo "Version files already at ${TAG}; tagging current HEAD."
+          else
+            git commit -m "chore(release): ${TAG}"
+          fi
           git tag -a "${TAG}" -m "${TAG}"
 
       - name: Push commit and tag
         run: |
           set -euo pipefail
+          # HEAD push is a no-op when nothing was committed in this run.
           git push origin HEAD:main
           git push origin "${{ steps.bump.outputs.tag }}"
 
