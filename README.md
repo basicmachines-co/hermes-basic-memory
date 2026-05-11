@@ -92,6 +92,27 @@ Examples:
 
 `/bm-project` and `/bm-workspace` are read-only in 0.2.0 — mid-session switching is intentionally not supported because auto-capture would otherwise land in the wrong place. Tracked as a follow-up.
 
+### Known issue: `/bm-*` commands may not appear in some Hermes gateway builds
+
+In plugin v0.2.0 the commands above are registered by this plugin, but some Hermes Agent gateway builds do not discover slash commands contributed by an **exclusive memory-provider plugin** during startup. The symptoms are:
+
+- the memory tools work for the agent (`bm_search`, `bm_read`, etc.);
+- `hermes memory status` shows `Provider: basic-memory` and `Status: available`; but
+- Discord/native slash command pickers do not show `/bm-search`, `/bm-read`, `/bm-context`, and the other `/bm-*` commands after `hermes gateway restart`.
+
+This is a Hermes Agent plugin-discovery issue, not a Basic Memory runtime issue. It is tracked upstream in [NousResearch/hermes-agent#23603](https://github.com/NousResearch/hermes-agent/issues/23603). Until the upstream Hermes fix is available in your installed Hermes version, use one of these workarounds:
+
+1. apply the Hermes-side patch described in [MONKEYPATCH.md](MONKEYPATCH.md), which loads the active memory provider during plugin command discovery; or
+2. use the agent tools directly (`bm_search`, `bm_read`, `bm_recent`, etc.) instead of native slash commands.
+
+After applying an updated or patched Hermes build, restart the gateway so Discord/native slash commands are re-synced:
+
+```bash
+hermes gateway restart
+```
+
+If Discord still does not show the commands immediately, type `/bm` directly or reload the Discord client; global command propagation can lag briefly.
+
 ## Configuration
 
 Defaults are reasonable for local use:
