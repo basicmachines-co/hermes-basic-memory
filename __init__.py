@@ -201,6 +201,35 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
 ]
 
 
+# Per-call project routing. Every bm_* tool accepts these — the agent overrides
+# Hermes's configured project to read/write against a different Basic Memory
+# project (e.g. a personal "main" project on BM Cloud). project_id is the
+# UUID-based unambiguous form: required when the same project name exists in
+# multiple cloud workspaces. _translate_args sends only one of the two to BM,
+# with project_id winning when both are passed.
+_PROJECT_ROUTING_PROPS: Dict[str, Dict[str, Any]] = {
+    "project": {
+        "type": "string",
+        "description": (
+            "Optional. Override the active Basic Memory project (e.g. 'main'). "
+            "If the same project name exists in multiple cloud workspaces, "
+            "use project_id instead for unambiguous routing."
+        ),
+    },
+    "project_id": {
+        "type": "string",
+        "description": (
+            "Optional. Override by project UUID (external_id from bm_projects). "
+            "Disambiguates when a project name appears in multiple workspaces. "
+            "Takes precedence over `project` if both are supplied."
+        ),
+    },
+}
+
+for _schema in TOOL_SCHEMAS:
+    _schema["parameters"]["properties"].update(_PROJECT_ROUTING_PROPS)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -578,10 +607,26 @@ class _BmMcpActor:
 # ---------------------------------------------------------------------------
 
 def _translate_args(
-    hermes_tool: str, args: Dict[str, Any], project: str
+    hermes_tool: str, args: Dict[str, Any], default_project: str
 ) -> Tuple[str, Dict[str, Any]]:
     bm_tool = _HERMES_TO_BM[hermes_tool]
-    out: Dict[str, Any] = {"project": project}
+    out: Dict[str, Any] = {}
+
+    # Project routing: project_id > project > configured default.
+    # The agent passes one of these to operate on a project other than the
+    # one Hermes is configured for. project_id (UUID from bm_projects) is
+    # the unambiguous form across cloud workspaces — preferred when project
+    # names might collide between workspaces. Only one of the two reaches
+    # BM so server-side precedence rules don't enter the picture.
+    project_id_override = args.get("project_id")
+    project_name_override = args.get("project")
+    if project_id_override:
+        out["project_id"] = str(project_id_override)
+    elif project_name_override:
+        out["project"] = str(project_name_override)
+    else:
+        out["project"] = default_project
+
     if hermes_tool == "bm_search":
         out["query"] = args["query"]
         if "limit" in args and args["limit"] is not None:
@@ -840,7 +885,12 @@ class BasicMemoryProvider(MemoryProvider):
             "- `bm_delete(identifier)` / `bm_move(identifier, new_folder)` — "
             "maintenance\n"
             "- `bm_recent(timeframe)` — list notes updated within a window "
-            "(default 7d) when there's no specific query yet"
+            "(default 7d) when there's no specific query yet\n"
+            "\n"
+            "**Cross-project routing.** Every tool accepts optional `project` "
+            "(name) or `project_id` (UUID). Omit both to use the active "
+            f"project (`{self._project}`). Use `project_id` (from `bm_projects`) "
+            "when the same project name exists in multiple cloud workspaces."
         )
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
