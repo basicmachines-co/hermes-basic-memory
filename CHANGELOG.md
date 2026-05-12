@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-05-12
+
+### Added
+- **Per-call project routing on every `bm_*` tool.** All eight tools now accept optional `project` (name) and `project_id` (UUID from `bm_projects`) parameters. The agent can write or read against a project other than the Hermes-configured one — useful when the user asks to write into a different cloud project (e.g. a personal `main` project) without reconfiguring the plugin. `project_id` takes precedence over `project`; both fall back to the configured default when omitted. Workspace routing is handled transparently by BM via `project_id` — no separate workspace parameter is needed.
+
+### Notes
+- This is the first of four planned improvements from a real-world friction note ("Hermes Basic Memory Cloud Task Experience"). Follow-ups will: promote `/bm-project` and `/bm-workspace` to agent-facing tools (`bm_projects`, `bm_workspaces`); add a `bm_import` tool for file-on-disk → BM-note in one call; and update SKILL.md with a worked cross-project workflow.
+
 ## [0.2.0] — 2026-05-11
 
 ### Added

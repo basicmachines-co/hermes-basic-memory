@@ -291,6 +291,101 @@ def test_translate_recent_full(bm):
     }
 
 
+# ---- Per-call project routing ----
+
+def test_translate_uses_default_project_when_no_override(bm):
+    """Existing behavior preserved: with no project override, the configured
+    default flows through."""
+    _, args = bm._translate_args("bm_search", {"query": "hi"}, "default-proj")
+    assert args["project"] == "default-proj"
+    assert "project_id" not in args
+
+
+def test_translate_uses_project_name_override(bm):
+    """Agent passes project="main" → that name reaches BM, not the default."""
+    _, args = bm._translate_args(
+        "bm_search", {"query": "hi", "project": "main"}, "default-proj"
+    )
+    assert args["project"] == "main"
+    assert "project_id" not in args
+
+
+def test_translate_uses_project_id_override(bm):
+    """Agent passes project_id=<uuid> → reaches BM as project_id, with no
+    project name in the call (would be redundant and risk server-side
+    precedence surprises)."""
+    uuid = "01HXYZ123ABC456DEF789GHI"
+    _, args = bm._translate_args(
+        "bm_search", {"query": "hi", "project_id": uuid}, "default-proj"
+    )
+    assert args["project_id"] == uuid
+    assert "project" not in args
+
+
+def test_translate_project_id_wins_when_both_supplied(bm):
+    """If the agent passes both, project_id is the more specific identifier
+    (UUID across workspaces) and takes precedence. Only project_id reaches BM."""
+    uuid = "01HXYZ123ABC456DEF789GHI"
+    _, args = bm._translate_args(
+        "bm_search",
+        {"query": "hi", "project": "main", "project_id": uuid},
+        "default-proj",
+    )
+    assert args["project_id"] == uuid
+    assert "project" not in args
+
+
+def test_translate_routing_coerces_to_string(bm):
+    """Defensive: if a model passes a non-string identifier (e.g. an int),
+    coerce rather than crash. BM accepts strings."""
+    _, args = bm._translate_args(
+        "bm_search", {"query": "hi", "project_id": 12345}, "default-proj"
+    )
+    assert args["project_id"] == "12345"
+
+
+@pytest.mark.parametrize("tool,base_args", [
+    ("bm_search",  {"query": "x"}),
+    ("bm_read",    {"identifier": "x"}),
+    ("bm_write",   {"title": "t", "content": "c", "folder": "f"}),
+    ("bm_edit",    {"identifier": "x", "operation": "append", "content": "c"}),
+    ("bm_context", {"url": "memory://x"}),
+    ("bm_delete",  {"identifier": "x"}),
+    ("bm_move",    {"identifier": "x", "new_folder": "f"}),
+    ("bm_recent",  {}),
+])
+def test_translate_routing_works_for_every_tool(bm, tool, base_args):
+    """Routing applies uniformly across all eight tools."""
+    args_with = dict(base_args, project="main")
+    _, out = bm._translate_args(tool, args_with, "default-proj")
+    assert out["project"] == "main"
+
+    args_with_id = dict(base_args, project_id="uuid-1")
+    _, out = bm._translate_args(tool, args_with_id, "default-proj")
+    assert out["project_id"] == "uuid-1"
+    assert "project" not in out
+
+    _, out = bm._translate_args(tool, base_args, "default-proj")
+    assert out["project"] == "default-proj"
+
+
+# ---- TOOL_SCHEMAS routing properties ----
+
+def test_every_tool_schema_advertises_project_routing(bm):
+    """Every bm_* tool must expose `project` and `project_id` so the agent
+    sees them in the tool surface. Regression: forgetting to add routing
+    props to a new tool would silently lock the agent into the active
+    project — exactly the friction Drew's note flagged."""
+    for schema in bm.TOOL_SCHEMAS:
+        props = schema["parameters"]["properties"]
+        assert "project" in props, f"{schema['name']} missing project prop"
+        assert "project_id" in props, f"{schema['name']} missing project_id prop"
+        # Routing is always optional — never in `required`.
+        required = schema["parameters"].get("required", [])
+        assert "project" not in required
+        assert "project_id" not in required
+
+
 # ---- _default_project / _hostname ----
 
 def test_default_project_format(bm):
