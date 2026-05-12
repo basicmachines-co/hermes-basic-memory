@@ -314,7 +314,7 @@ def test_translate_uses_project_id_override(bm):
     """Agent passes project_id=<uuid> → reaches BM as project_id, with no
     project name in the call (would be redundant and risk server-side
     precedence surprises)."""
-    uuid = "01HXYZ123ABC456DEF789GHI"
+    uuid = "bf2a4c1e-d77f-4b7a-9c3e-5d8a1f0e2b6d"
     _, args = bm._translate_args(
         "bm_search", {"query": "hi", "project_id": uuid}, "default-proj"
     )
@@ -325,7 +325,7 @@ def test_translate_uses_project_id_override(bm):
 def test_translate_project_id_wins_when_both_supplied(bm):
     """If the agent passes both, project_id is the more specific identifier
     (UUID across workspaces) and takes precedence. Only project_id reaches BM."""
-    uuid = "01HXYZ123ABC456DEF789GHI"
+    uuid = "bf2a4c1e-d77f-4b7a-9c3e-5d8a1f0e2b6d"
     _, args = bm._translate_args(
         "bm_search",
         {"query": "hi", "project": "main", "project_id": uuid},
@@ -361,9 +361,9 @@ def test_translate_routing_works_for_every_tool(bm, tool, base_args):
     _, out = bm._translate_args(tool, args_with, "default-proj")
     assert out["project"] == "main"
 
-    args_with_id = dict(base_args, project_id="uuid-1")
+    args_with_id = dict(base_args, project_id="e1d3a5b8-0492-4c1f-8e7d-2a4b6c8d0e2f")
     _, out = bm._translate_args(tool, args_with_id, "default-proj")
-    assert out["project_id"] == "uuid-1"
+    assert out["project_id"] == "e1d3a5b8-0492-4c1f-8e7d-2a4b6c8d0e2f"
     assert "project" not in out
 
     _, out = bm._translate_args(tool, base_args, "default-proj")
@@ -398,7 +398,7 @@ def test_translate_global_tools_ignore_project_kwargs(bm):
     the listing would be worse than ignoring the args."""
     _, out = bm._translate_args(
         "bm_projects",
-        {"project": "main", "project_id": "uuid-1"},
+        {"project": "main", "project_id": "e1d3a5b8-0492-4c1f-8e7d-2a4b6c8d0e2f"},
         "default-proj",
     )
     assert "project" not in out
