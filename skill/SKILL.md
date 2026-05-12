@@ -90,7 +90,7 @@ bm_recent({ timeframe: "2 weeks", type: "entity" })
 `timeframe` accepts natural language (`"yesterday"`, `"2 weeks"`, `"last month"`) or compact forms (`"7d"`, `"24h"`). Default is `7d`.
 
 ### `bm_projects` — list available projects
-Returns name, workspace slug, and `external_id` (UUID) per project across local and cloud. Call this when the user names a project that isn't the active one. Route follow-up tool calls either by workspace-qualified name (`project: "personal/main"`) or by UUID (`project_id: "01HXYZ..."`) — see Cross-project routing below.
+Returns name, workspace slug, and `external_id` (UUID) per project across local and cloud. Call this when the user names a project that isn't the active one. Route follow-up tool calls either by workspace-qualified name (`project: "personal/main"`) or by UUID (`project_id: "bf2a4c1e-d77f-..."`) — see Cross-project routing below.
 
 ```
 bm_projects()
@@ -134,7 +134,7 @@ bm_write({ title: "...", folder: "...", content: "...", project: "main" })
 bm_write({ title: "...", folder: "...", content: "...", project: "personal/main" })
 
 # UUID (most stable, survives renames)
-bm_write({ title: "...", folder: "...", content: "...", project_id: "01HXYZ..." })
+bm_write({ title: "...", folder: "...", content: "...", project_id: "bf2a4c1e-d77f-..." })
 ```
 
 `bm_projects` and `bm_workspaces` themselves do **not** take routing — they list across everything.
@@ -147,7 +147,7 @@ When the user asks something like *"save this markdown file to my personal `main
 
    ```
    bm_projects()
-   # → [{name: "main", external_id: "01HXYZ...", workspace: "Personal", ...}, ...]
+   # → [{name: "main", external_id: "bf2a4c1e-d77f-4b7a-9c3e-5d8a1f0e2b6d", workspace: "Personal", ...}, ...]
    ```
 
    If a project name appears in multiple workspaces, use `bm_workspaces()` to confirm which slug you want.
