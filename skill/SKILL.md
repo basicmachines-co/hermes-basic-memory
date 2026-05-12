@@ -90,7 +90,7 @@ bm_recent({ timeframe: "2 weeks", type: "entity" })
 `timeframe` accepts natural language (`"yesterday"`, `"2 weeks"`, `"last month"`) or compact forms (`"7d"`, `"24h"`). Default is `7d`.
 
 ### `bm_projects` — list available projects
-Returns name and `external_id` (UUID) per project across local and cloud. Call this when the user names a project that isn't the active one — the UUID is what `project_id` on the other tools expects.
+Returns name, workspace slug, and `external_id` (UUID) per project across local and cloud. Call this when the user names a project that isn't the active one. Route follow-up tool calls either by workspace-qualified name (`project: "personal/main"`) or by UUID (`project_id: "01HXYZ..."`) — see Cross-project routing below.
 
 ```
 bm_projects()
@@ -103,20 +103,37 @@ Workspaces are a BM Cloud concept. Returns name, type, role, and default flag. P
 bm_workspaces()
 ```
 
+## Permalinks
+
+A permalink is the canonical, URL-friendly identifier for a note. Three shapes exist; the read/write tools accept all of them:
+
+| Shape | Example | When |
+|---|---|---|
+| **Short** | `decisions/auth-strategy` | Bare `folder/note-slug`. Tools need a `project` (or `project_id`) arg to route — the permalink alone isn't enough. |
+| **Project-qualified** | `main/decisions/auth-strategy` | `project-name/folder/note-slug`. Carries enough context to route without a separate `project` arg. |
+| **Workspace-qualified** | `personal/main/decisions/auth-strategy` | `workspace-slug/project-name/folder/note-slug`. Fully routes, including across cloud workspaces with same-named projects. |
+
+**Important: the permalink returned by `bm_write` already encodes the routing it needs for follow-up reads.** If you wrote with `project="personal/main"`, you get back `personal/main/folder/note-slug` and can call `bm_read({ identifier: <that permalink> })` with no `project` arg. The permalink self-routes.
+
+`memory://` URLs follow the same shapes: `memory://personal/main/decisions/auth-strategy` is valid. The `memory://` prefix is optional for `bm_read` (any of the three permalink shapes works directly); `bm_context` expects the prefix.
+
 ## Cross-project routing
 
-Every read/write tool (`bm_search`, `bm_read`, `bm_write`, `bm_edit`, `bm_context`, `bm_delete`, `bm_move`, `bm_recent`) accepts two optional routing parameters:
+Every read/write tool (`bm_search`, `bm_read`, `bm_write`, `bm_edit`, `bm_context`, `bm_delete`, `bm_move`, `bm_recent`) accepts optional `project` and `project_id`:
 
-- `project` — project name (e.g. `"main"`). Easy to read; can be ambiguous if the same name exists in multiple cloud workspaces.
-- `project_id` — UUID from `bm_projects`. Unambiguous; the right choice when project names might collide. Wins over `project` if both are passed.
+- `project` — project name, optionally workspace-qualified. Plain (`"main"`) when the name is globally unique; qualified (`"personal/main"`, `"team-paul/research"`) when you need to pick a specific cloud workspace by slug.
+- `project_id` — UUID from `bm_projects` (`external_id` field). The most stable identifier — survives project renames and works across workspaces without qualification. Wins over `project` if both are passed.
 
 Omit both and the call uses the Hermes-configured active project.
 
 ```
-# Use a specific project by name
+# Plain project name (unique)
 bm_write({ title: "...", folder: "...", content: "...", project: "main" })
 
-# Use a specific project by UUID (safer when workspaces are in play)
+# Workspace-qualified name (disambiguates same-named projects across workspaces)
+bm_write({ title: "...", folder: "...", content: "...", project: "personal/main" })
+
+# UUID (most stable, survives renames)
 bm_write({ title: "...", folder: "...", content: "...", project_id: "01HXYZ..." })
 ```
 
@@ -126,33 +143,34 @@ bm_write({ title: "...", folder: "...", content: "...", project_id: "01HXYZ..." 
 
 When the user asks something like *"save this markdown file to my personal `main` project, return the permalink"*:
 
-1. **Discover the project.** Call `bm_projects()` and find the entry matching the user's described project + workspace. Capture its `external_id`.
+1. **Discover the project.** Call `bm_projects()` and find the entry matching the user's described project + workspace. You can route by either the workspace-qualified name (`personal/main`) or the UUID (`external_id`).
 
    ```
    bm_projects()
    # → [{name: "main", external_id: "01HXYZ...", workspace: "Personal", ...}, ...]
    ```
 
-   If multiple projects share the name, call `bm_workspaces()` and match by workspace before picking a UUID.
+   If a project name appears in multiple workspaces, use `bm_workspaces()` to confirm which slug you want.
 
 2. **Read the file from disk.** Use Hermes's filesystem tool (not a `bm_*` tool — local files aren't in the graph yet).
 
-3. **Write the note with explicit routing.** Pass the UUID so the write lands in the right project even when other workspaces exist.
+3. **Write the note with explicit routing.** Either form works; the workspace-qualified name reads cleaner in logs, the UUID is more durable.
 
    ```
    bm_write({
      title: "StartWithDrew Level 9 Task Queue",
      folder: "startwithdrew",
      content: <file body>,
-     project_id: "01HXYZ..."
+     project: "personal/main"
    })
-   # → returns the permalink
+   # → returns "personal/main/startwithdrew/start-with-drew-level-9-task-queue"
+   # (the returned permalink is workspace-qualified — carries its own routing)
    ```
 
-4. **Verify by reading back.** Confirms the note landed and returns the canonical permalink.
+4. **Verify by reading back.** No `project` arg needed — the workspace-qualified permalink routes itself.
 
    ```
-   bm_read({ identifier: <permalink>, project_id: "01HXYZ..." })
+   bm_read({ identifier: "personal/main/startwithdrew/start-with-drew-level-9-task-queue" })
    ```
 
 Return the permalink (and the project name for clarity) to the user.
@@ -166,8 +184,9 @@ Return the permalink (and the project name for clarity) to the user.
 | Updating prior work | `bm_edit` (append for time-ordered logs, replace_section for living docs) |
 | Exploring related concepts | `bm_context` |
 | "What was I working on yesterday?" / no specific query yet | `bm_recent` |
-| User names a project that isn't the active one | `bm_projects` → pick UUID → call read/write tool with `project_id` |
-| Same project name might exist in multiple workspaces | `bm_projects` + `bm_workspaces` to disambiguate, then `project_id` |
+| User names a project that isn't the active one | `bm_projects` → call read/write tool with `project: "workspace/name"` or `project_id: "<uuid>"` |
+| Same project name might exist in multiple workspaces | `bm_projects` (+ `bm_workspaces` if needed) → route with workspace-qualified `project` or `project_id` |
+| Following up on a freshly-written note | Use the returned permalink directly — it already encodes the routing |
 
 ## Note structure
 
@@ -196,10 +215,6 @@ Background and current situation.
 - [ ] Implement
 - [ ] Document
 ```
-
-## Memory URLs
-
-`memory://projects/api-redesign` — direct reference. Used in `bm_context`, `bm_read`. The `memory://` prefix is optional for `bm_read`.
 
 ## Behavior guidelines
 
