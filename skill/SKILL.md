@@ -190,7 +190,7 @@ Return the permalink (and the project name for clarity) to the user.
 
 ## Note structure
 
-Use consistent markdown:
+BM treats `- [category]` lines as **observations** and WikiLink lines under `## Relations` as **relations**. Categories (`[decision]`, `[insight]`, `[risk]`, `[fact]`, `[todo]`, …) and relation types (`relates_to`, `implements`, `depends_on`, `blocks`, …) are open-ended — use what fits the content. YAML frontmatter is supported with `title`, `type`, `tags`, and `permalink` as standard fields; any custom fields are allowed. See the [knowledge format docs](https://docs.basicmemory.com/raw/concepts/knowledge-format.md) for the full convention.
 
 ```markdown
 # Clear Title
@@ -227,3 +227,16 @@ Background and current situation.
 ## Footgun
 
 If a note's body contains literal `<memory-context>...</memory-context>` tags, Hermes's streaming output scrubber will eat those tags (and the text between paired ones) when you echo the note verbatim back to the user. Tool *inputs* are unaffected. If you must include such content, fence it in a code block.
+
+## Further reading
+
+Official docs live at [docs.basicmemory.com](https://docs.basicmemory.com). Every page has an AI-friendly raw markdown view at `/raw/<path>.md` (or send `Accept: text/markdown` to the canonical URL). `WebFetch` any of these when you need detail beyond what this skill covers:
+
+- **[Knowledge format](https://docs.basicmemory.com/raw/concepts/knowledge-format.md)** — observation categories, relation types, frontmatter conventions.
+- **[Observations & relations](https://docs.basicmemory.com/raw/concepts/observations-and-relations.md)** — how notes form a graph that's searchable and traversable.
+- **[Memory URLs](https://docs.basicmemory.com/raw/concepts/memory-urls.md)** — title-based addressing, wildcards (`memory://docs/*`), and routing resolution order.
+- **[Projects & folders](https://docs.basicmemory.com/raw/concepts/projects-and-folders.md)** — multi-project layout, folder organization, cloud routing behavior.
+- **[Semantic search](https://docs.basicmemory.com/raw/concepts/semantic-search.md)** — how `bm_search` resolves queries (semantic + full-text).
+- **[MCP tools reference](https://docs.basicmemory.com/raw/reference/mcp-tools-reference.md)** — Basic Memory's full MCP surface (the `bm_*` tools here are a curated subset).
+- **[Cloud routing](https://docs.basicmemory.com/raw/cloud/routing.md)** — local vs cloud project modes, per-project routing setup.
+- **[llms.txt index](https://docs.basicmemory.com/llms.txt)** — full sitemap of raw markdown pages, useful when you need to look up a page not listed above.
