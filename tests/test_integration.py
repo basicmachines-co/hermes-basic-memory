@@ -324,12 +324,14 @@ def test_prefetch_against_real_bm(provider, bm):
         "folder": "tests",
     })
 
-    # BM may need time to index the new note. prefetch's own actor.call
-    # times out at 3.0s per attempt; on a cold CI runner (especially with
-    # onnxruntime startup), indexing latency plus a few retries can push
-    # well past the previous 5s budget. 30s gives ~10 attempts and absorbs
-    # the worst observed cold-start delays.
-    deadline = time.monotonic() + 30.0
+    # BM's FTS index is updated synchronously inside the write_note API
+    # path (knowledge_router.py:272), so this loop is really only smoothing
+    # over the round-trip cost of a few RPCs on a slow runner. prefetch
+    # explicitly requests search_type="text" so we don't get pulled onto
+    # BM's hybrid path, where vector indexing is async and would race the
+    # search.
+    budget_secs = 10.0
+    deadline = time.monotonic() + budget_secs
     out = ""
     attempts = 0
     while time.monotonic() < deadline:
@@ -341,7 +343,7 @@ def test_prefetch_against_real_bm(provider, bm):
 
     assert out, (
         f"prefetch returned nothing after {attempts} attempt(s) over "
-        f"{30.0}s; provider._failure_count={provider._failure_count}, "
+        f"{budget_secs}s; provider._failure_count={provider._failure_count}, "
         f"circuit_open={provider._is_circuit_open()}. "
         f"Either BM didn't index the note in time or prefetch's actor.call "
         f"is timing out internally."

@@ -975,12 +975,20 @@ class BasicMemoryProvider(MemoryProvider):
         if not self._initialized or self._actor is None or self._is_circuit_open():
             return ""
         try:
+            # search_type="text" — bypass BM's "hybrid" default which mixes FTS
+            # with vector search. Vector indexing is scheduled asynchronously
+            # in BM (see services/search_service.py:_schedule_vector_sync_if_enabled),
+            # so hybrid search can miss notes that were just written, especially
+            # under cold-start or load. Prefetch is a recall hot path with a
+            # 3s budget and the queries are usually keyword-like — FTS-only is
+            # both faster and more deterministic.
             raw = self._actor.call(
                 "search_notes",
                 {
                     "project": self._project,
                     "query": query,
                     "page_size": 5,
+                    "search_type": "text",
                     "output_format": "json",
                 },
                 timeout=3.0,
@@ -998,12 +1006,16 @@ class BasicMemoryProvider(MemoryProvider):
 
         def _bg() -> None:
             try:
+                # search_type="text" mirrors prefetch() — see note there. The
+                # background path can afford a longer timeout but the
+                # async-vector-indexing race still applies.
                 raw = self._actor.call(  # type: ignore[union-attr]
                     "search_notes",
                     {
                         "project": self._project,
                         "query": query,
                         "page_size": 5,
+                        "search_type": "text",
                         "output_format": "json",
                     },
                     timeout=10.0,

@@ -42,6 +42,9 @@ def test_prefetch_calls_search_when_cache_empty(bm):
     assert bm_args["query"] == "hello world"
     assert bm_args["page_size"] == 5
     assert bm_args["output_format"] == "json"
+    # Pin search_type=text so BM doesn't fall into the hybrid+async-vector
+    # path on the prefetch hot path. See prefetch() comment for rationale.
+    assert bm_args["search_type"] == "text"
 
 
 def test_prefetch_returns_empty_when_uninitialized(bm):
