@@ -52,18 +52,19 @@ def test_get_tool_schemas_unconditional(bm):
     subsequent bm_* invocation returns "Unknown tool: bm_*" forever.
     Schemas are static — return them unconditionally.
     """
-    # Fresh provider, never initialized, should still expose all 8 schemas
+    # Fresh provider, never initialized, should still expose all 10 schemas
     p = bm.BasicMemoryProvider()
     assert p._initialized is False
     schemas = p.get_tool_schemas()
-    assert len(schemas) == 8
+    assert len(schemas) == 10
     names = {s["name"] for s in schemas}
     assert names == {"bm_search", "bm_read", "bm_write", "bm_edit",
-                     "bm_context", "bm_delete", "bm_move", "bm_recent"}
+                     "bm_context", "bm_delete", "bm_move", "bm_recent",
+                     "bm_projects", "bm_workspaces"}
 
-    # Initialized provider also returns 8 (idempotent)
+    # Initialized provider also returns 10 (idempotent)
     p._initialized = True
-    assert len(p.get_tool_schemas()) == 8
+    assert len(p.get_tool_schemas()) == 10
 
 
 def test_get_tool_schemas_returns_independent_copies(bm):
@@ -71,7 +72,7 @@ def test_get_tool_schemas_returns_independent_copies(bm):
     p = bm.BasicMemoryProvider()
     schemas = p.get_tool_schemas()
     schemas.clear()
-    assert len(p.get_tool_schemas()) == 8
+    assert len(p.get_tool_schemas()) == 10
 
 
 def test_handle_tool_call_uninitialized(bm):
