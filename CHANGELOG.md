@@ -11,7 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`bm_projects` and `bm_workspaces` agent tools.** Promotes the discovery logic previously available only as `/bm-project` and `/bm-workspace` slash commands to agent-facing tools. `bm_projects` returns JSON with `name` and `external_id` (UUID) per project so the agent can hand the UUID to `bm_write` / `bm_read` / etc. via `project_id` — the unambiguous form across cloud workspaces. `bm_workspaces` lists BM Cloud workspaces (name, type, role, default flag). Together with per-call routing, these unblock the workflow Drew's friction note flagged: agent picks the right project + workspace before writing, instead of silently operating against the active Hermes memory project.
 
 ### Notes
-- First two of four planned improvements from a real-world friction note ("Hermes Basic Memory Cloud Task Experience"). Follow-ups: add a `bm_import` tool for file-on-disk → BM-note in one call; update SKILL.md with the worked discovery → route → write → verify workflow.
+- Addresses the routing and discovery friction in the real-world note "Hermes Basic Memory Cloud Task Experience." A SKILL.md update with the worked discovery → route → write → verify workflow is the remaining follow-up. A proposed `bm_import` tool was evaluated and dropped — `read_file` + `bm_write` already composes the same operation with no new capability, at the cost of one more tool in the surface.
 - The slash commands `/bm-project` and `/bm-workspace` still exist and behave identically — they continue to call `list_memory_projects` / `list_workspaces` directly via the actor. No behavior change for human use.
 
 ## [0.2.0] — 2026-05-11
