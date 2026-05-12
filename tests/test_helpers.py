@@ -355,7 +355,8 @@ def test_translate_routing_coerces_to_string(bm):
     ("bm_recent",  {}),
 ])
 def test_translate_routing_works_for_every_tool(bm, tool, base_args):
-    """Routing applies uniformly across all eight tools."""
+    """Routing applies uniformly across every per-project tool. Global
+    discovery tools (bm_projects, bm_workspaces) are tested separately."""
     args_with = dict(base_args, project="main")
     _, out = bm._translate_args(tool, args_with, "default-proj")
     assert out["project"] == "main"
@@ -369,15 +370,59 @@ def test_translate_routing_works_for_every_tool(bm, tool, base_args):
     assert out["project"] == "default-proj"
 
 
+# ---- Global discovery tools (bm_projects, bm_workspaces) ----
+
+def test_translate_bm_projects_no_routing(bm):
+    """bm_projects is a global discovery tool — it lists across all projects
+    and workspaces. _translate_args must NOT inject a default project
+    (would make BM scope the listing) and MUST request JSON so the agent
+    can parse identifiers out of the response."""
+    tool, out = bm._translate_args("bm_projects", {}, "default-proj")
+    assert tool == "list_memory_projects"
+    assert "project" not in out
+    assert "project_id" not in out
+    assert out == {"output_format": "json"}
+
+
+def test_translate_bm_workspaces_no_routing(bm):
+    tool, out = bm._translate_args("bm_workspaces", {}, "default-proj")
+    assert tool == "list_workspaces"
+    assert "project" not in out
+    assert "project_id" not in out
+    assert out == {"output_format": "json"}
+
+
+def test_translate_global_tools_ignore_project_kwargs(bm):
+    """Even if a confused caller passes project/project_id to a global tool,
+    those args are dropped — BM doesn't accept them and silently scoping
+    the listing would be worse than ignoring the args."""
+    _, out = bm._translate_args(
+        "bm_projects",
+        {"project": "main", "project_id": "uuid-1"},
+        "default-proj",
+    )
+    assert "project" not in out
+    assert "project_id" not in out
+
+
 # ---- TOOL_SCHEMAS routing properties ----
 
 def test_every_tool_schema_advertises_project_routing(bm):
-    """Every bm_* tool must expose `project` and `project_id` so the agent
-    sees them in the tool surface. Regression: forgetting to add routing
-    props to a new tool would silently lock the agent into the active
-    project — exactly the friction Drew's note flagged."""
+    """Every per-project bm_* tool must expose `project` and `project_id` so
+    the agent sees them in the tool surface. Regression: forgetting to add
+    routing props to a new tool would silently lock the agent into the
+    active project — exactly the friction Drew's note flagged.
+
+    Global discovery tools (bm_projects, bm_workspaces) are excluded — they
+    list across projects/workspaces and don't take routing args."""
     for schema in bm.TOOL_SCHEMAS:
         props = schema["parameters"]["properties"]
+        if schema["name"] in bm._GLOBAL_TOOLS:
+            assert "project" not in props, \
+                f"{schema['name']} is a global tool; should not have project prop"
+            assert "project_id" not in props, \
+                f"{schema['name']} is a global tool; should not have project_id prop"
+            continue
         assert "project" in props, f"{schema['name']} missing project prop"
         assert "project_id" in props, f"{schema['name']} missing project_id prop"
         # Routing is always optional — never in `required`.
@@ -405,7 +450,8 @@ def test_hostname_lowercased(bm, monkeypatch):
 def test_tool_schemas_complete(bm):
     names = {s["name"] for s in bm.TOOL_SCHEMAS}
     expected = {"bm_search", "bm_read", "bm_write", "bm_edit",
-                "bm_context", "bm_delete", "bm_move", "bm_recent"}
+                "bm_context", "bm_delete", "bm_move", "bm_recent",
+                "bm_projects", "bm_workspaces"}
     assert names == expected
 
 

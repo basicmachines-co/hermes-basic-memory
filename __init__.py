@@ -73,7 +73,14 @@ _HERMES_TO_BM: Dict[str, str] = {
     "bm_delete": "delete_note",
     "bm_move": "move_note",
     "bm_recent": "recent_activity",
+    "bm_projects": "list_memory_projects",
+    "bm_workspaces": "list_workspaces",
 }
+
+# Discovery tools that operate across all projects/workspaces. They don't
+# accept project/project_id args (no per-call routing) and the user-facing
+# schemas omit those properties.
+_GLOBAL_TOOLS: frozenset = frozenset({"bm_projects", "bm_workspaces"})
 
 TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
@@ -198,6 +205,29 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "bm_projects",
+        "description": (
+            "List all available Basic Memory projects (local + cloud). Returns "
+            "JSON with name and `external_id` (UUID) per project. Use the UUID "
+            "as `project_id` on other bm_* tools for unambiguous routing across "
+            "cloud workspaces. Call this when the user names a project that "
+            "isn't the active one, or when you need to disambiguate same-name "
+            "projects."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "bm_workspaces",
+        "description": (
+            "List Basic Memory Cloud workspaces the user belongs to. Workspaces "
+            "are a BM Cloud concept; local mode returns just the personal "
+            "workspace. Returns JSON with name, type, role, and default flag. "
+            "Pair with bm_projects to disambiguate when the same project name "
+            "exists in multiple workspaces."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -227,6 +257,10 @@ _PROJECT_ROUTING_PROPS: Dict[str, Dict[str, Any]] = {
 }
 
 for _schema in TOOL_SCHEMAS:
+    if _schema["name"] in _GLOBAL_TOOLS:
+        # Discovery tools (bm_projects, bm_workspaces) list everything —
+        # they don't take per-call routing.
+        continue
     _schema["parameters"]["properties"].update(_PROJECT_ROUTING_PROPS)
 
 
@@ -618,14 +652,18 @@ def _translate_args(
     # the unambiguous form across cloud workspaces — preferred when project
     # names might collide between workspaces. Only one of the two reaches
     # BM so server-side precedence rules don't enter the picture.
-    project_id_override = args.get("project_id")
-    project_name_override = args.get("project")
-    if project_id_override:
-        out["project_id"] = str(project_id_override)
-    elif project_name_override:
-        out["project"] = str(project_name_override)
-    else:
-        out["project"] = default_project
+    #
+    # Global discovery tools (bm_projects, bm_workspaces) list everything
+    # and don't take routing args at all — skip the block for them.
+    if hermes_tool not in _GLOBAL_TOOLS:
+        project_id_override = args.get("project_id")
+        project_name_override = args.get("project")
+        if project_id_override:
+            out["project_id"] = str(project_id_override)
+        elif project_name_override:
+            out["project"] = str(project_name_override)
+        else:
+            out["project"] = default_project
 
     if hermes_tool == "bm_search":
         out["query"] = args["query"]
@@ -663,6 +701,10 @@ def _translate_args(
             out["page_size"] = int(args["limit"])
         if args.get("type"):
             out["type"] = args["type"]
+    elif hermes_tool in _GLOBAL_TOOLS:
+        # The agent needs to parse identifiers (UUIDs, workspace slugs) out
+        # of the response, so request JSON regardless of BM's text default.
+        out["output_format"] = "json"
     return bm_tool, out
 
 
@@ -886,8 +928,13 @@ class BasicMemoryProvider(MemoryProvider):
             "maintenance\n"
             "- `bm_recent(timeframe)` — list notes updated within a window "
             "(default 7d) when there's no specific query yet\n"
+            "- `bm_projects()` — list available projects (local + cloud) with "
+            "their UUIDs; call when the user names a project that isn't the "
+            "active one\n"
+            "- `bm_workspaces()` — list BM Cloud workspaces; pair with "
+            "`bm_projects` to disambiguate same-named projects\n"
             "\n"
-            "**Cross-project routing.** Every tool accepts optional `project` "
+            "**Cross-project routing.** Read/write tools accept optional `project` "
             "(name) or `project_id` (UUID). Omit both to use the active "
             f"project (`{self._project}`). Use `project_id` (from `bm_projects`) "
             "when the same project name exists in multiple cloud workspaces."

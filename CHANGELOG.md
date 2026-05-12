@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-05-12
+
+### Added
+- **`bm_projects` and `bm_workspaces` agent tools.** Promotes the discovery logic previously available only as `/bm-project` and `/bm-workspace` slash commands to agent-facing tools. `bm_projects` returns JSON with `name` and `external_id` (UUID) per project so the agent can hand the UUID to `bm_write` / `bm_read` / etc. via `project_id` — the unambiguous form across cloud workspaces. `bm_workspaces` lists BM Cloud workspaces (name, type, role, default flag). Together they unblock the workflow Drew's friction note flagged: agent picks the right project + workspace before writing, instead of silently operating against the active Hermes memory project.
+
+### Notes
+- Second of four planned improvements from the cross-project friction note. Next up: a `bm_import` tool for file-on-disk → BM-note in one call, and a SKILL.md update with the worked discovery → route → write → verify workflow.
+- The slash commands `/bm-project` and `/bm-workspace` still exist and behave identically — they continue to call `list_memory_projects` / `list_workspaces` directly via the actor. No behavior change for human use.
+
 ## [0.3.0] — 2026-05-12
 
 ### Added
