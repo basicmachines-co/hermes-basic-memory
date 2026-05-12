@@ -23,6 +23,9 @@ The CLI is fine when you genuinely need a feature these wrappers don't expose (r
 | Create / update a note | `bm_write` / `bm_edit` |
 | Navigate relations | `bm_context` |
 | Move / delete | `bm_move` / `bm_delete` |
+| What's been touched lately | `bm_recent` |
+| List available projects | `bm_projects` |
+| List cloud workspaces | `bm_workspaces` |
 
 ## Tool reference
 
@@ -75,6 +78,85 @@ bm_edit({
 ### `bm_delete` / `bm_move` — maintenance
 Use sparingly. `bm_move` takes `new_folder`.
 
+### `bm_recent` — what's been touched lately
+Returns notes updated within a window. Use when there's no specific query yet — e.g. "what was I working on yesterday?"
+
+```
+bm_recent({ timeframe: "7d" })
+bm_recent({ timeframe: "yesterday", limit: 20 })
+bm_recent({ timeframe: "2 weeks", type: "entity" })
+```
+
+`timeframe` accepts natural language (`"yesterday"`, `"2 weeks"`, `"last month"`) or compact forms (`"7d"`, `"24h"`). Default is `7d`.
+
+### `bm_projects` — list available projects
+Returns name and `external_id` (UUID) per project across local and cloud. Call this when the user names a project that isn't the active one — the UUID is what `project_id` on the other tools expects.
+
+```
+bm_projects()
+```
+
+### `bm_workspaces` — list BM Cloud workspaces
+Workspaces are a BM Cloud concept. Returns name, type, role, and default flag. Pair with `bm_projects` when the same project name might exist in more than one workspace and you need to disambiguate.
+
+```
+bm_workspaces()
+```
+
+## Cross-project routing
+
+Every read/write tool (`bm_search`, `bm_read`, `bm_write`, `bm_edit`, `bm_context`, `bm_delete`, `bm_move`, `bm_recent`) accepts two optional routing parameters:
+
+- `project` — project name (e.g. `"main"`). Easy to read; can be ambiguous if the same name exists in multiple cloud workspaces.
+- `project_id` — UUID from `bm_projects`. Unambiguous; the right choice when project names might collide. Wins over `project` if both are passed.
+
+Omit both and the call uses the Hermes-configured active project.
+
+```
+# Use a specific project by name
+bm_write({ title: "...", folder: "...", content: "...", project: "main" })
+
+# Use a specific project by UUID (safer when workspaces are in play)
+bm_write({ title: "...", folder: "...", content: "...", project_id: "01HXYZ..." })
+```
+
+`bm_projects` and `bm_workspaces` themselves do **not** take routing — they list across everything.
+
+## Recipe: writing an existing file into a specific project
+
+When the user asks something like *"save this markdown file to my personal `main` project, return the permalink"*:
+
+1. **Discover the project.** Call `bm_projects()` and find the entry matching the user's described project + workspace. Capture its `external_id`.
+
+   ```
+   bm_projects()
+   # → [{name: "main", external_id: "01HXYZ...", workspace: "Personal", ...}, ...]
+   ```
+
+   If multiple projects share the name, call `bm_workspaces()` and match by workspace before picking a UUID.
+
+2. **Read the file from disk.** Use Hermes's filesystem tool (not a `bm_*` tool — local files aren't in the graph yet).
+
+3. **Write the note with explicit routing.** Pass the UUID so the write lands in the right project even when other workspaces exist.
+
+   ```
+   bm_write({
+     title: "StartWithDrew Level 9 Task Queue",
+     folder: "startwithdrew",
+     content: <file body>,
+     project_id: "01HXYZ..."
+   })
+   # → returns the permalink
+   ```
+
+4. **Verify by reading back.** Confirms the note landed and returns the canonical permalink.
+
+   ```
+   bm_read({ identifier: <permalink>, project_id: "01HXYZ..." })
+   ```
+
+Return the permalink (and the project name for clarity) to the user.
+
 ## When to use each tool
 
 | Situation | Tool |
@@ -83,6 +165,9 @@ Use sparingly. `bm_move` takes `new_folder`.
 | User exposes a decision, plan, or meeting outcome | offer to `bm_write` |
 | Updating prior work | `bm_edit` (append for time-ordered logs, replace_section for living docs) |
 | Exploring related concepts | `bm_context` |
+| "What was I working on yesterday?" / no specific query yet | `bm_recent` |
+| User names a project that isn't the active one | `bm_projects` → pick UUID → call read/write tool with `project_id` |
+| Same project name might exist in multiple workspaces | `bm_projects` + `bm_workspaces` to disambiguate, then `project_id` |
 
 ## Note structure
 
