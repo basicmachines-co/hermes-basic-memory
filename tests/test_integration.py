@@ -324,15 +324,27 @@ def test_prefetch_against_real_bm(provider, bm):
         "folder": "tests",
     })
 
-    # BM may need a beat to index the new note
-    deadline = time.monotonic() + 5.0
+    # BM may need time to index the new note. prefetch's own actor.call
+    # times out at 3.0s per attempt; on a cold CI runner (especially with
+    # onnxruntime startup), indexing latency plus a few retries can push
+    # well past the previous 5s budget. 30s gives ~10 attempts and absorbs
+    # the worst observed cold-start delays.
+    deadline = time.monotonic() + 30.0
     out = ""
+    attempts = 0
     while time.monotonic() < deadline:
+        attempts += 1
         out = provider.prefetch(unique)
         if out:
             break
         time.sleep(0.25)
 
-    assert out, "prefetch returned nothing — BM may not have indexed the new note"
+    assert out, (
+        f"prefetch returned nothing after {attempts} attempt(s) over "
+        f"{30.0}s; provider._failure_count={provider._failure_count}, "
+        f"circuit_open={provider._is_circuit_open()}. "
+        f"Either BM didn't index the note in time or prefetch's actor.call "
+        f"is timing out internally."
+    )
     assert "Basic Memory Recall" in out
     assert unique in out or "Prefetch Test" in out
