@@ -4,6 +4,22 @@ This document describes the Hermes Agent-side patch needed when `/bm-*` slash co
 
 Agents may use this file as a guide to add support for `/bm-*` slash commands in Hermes Agent builds that do not yet include the upstream fix.
 
+## Current status and compatibility
+
+This is a **Hermes Agent-side** compatibility patch, not a Basic Memory plugin runtime patch.
+
+| Hermes Agent version | Basic Memory plugin version | Guidance |
+|---|---:|---|
+| `v0.13.x` | `v0.3.0` | Plugin `v0.3.0` remains the right runtime release. If `/bm-*` commands are missing, use the Hermes Agent-side monkeypatch below or wait for the upstream Hermes fix. |
+| `v0.14.0` / `v2026.5.16` | `v0.3.1` docs, runtime still equivalent to `v0.3.0` | The plugin runtime still works, but Hermes Agent `v0.14.0` still does **not** include the upstream slash-command discovery fix. Use the v0.14.0-compatible Hermes Agent-side patch below. |
+| Future Hermes release with upstream fix | Latest plugin | Do **not** apply this monkeypatch unless `/bm-*` commands are still absent; the fix should be redundant once Hermes loads active exclusive memory-provider commands during command discovery. |
+
+Checked against Hermes Agent `v2026.5.16` / `v0.14.0` on 2026-05-16: the upstream Hermes release still does **not** include this fix. After applying the Hermes Agent-side patch below locally, `get_plugin_commands()` returns the expected `/bm-*` commands.
+
+Important nuance: recent `hermes-basic-memory` versions include a best-effort PluginManager reach-in that registers commands when the provider is loaded. That workaround alone is not enough for gateway startup discovery in affected Hermes builds, because `get_plugin_commands()` does not load the active exclusive memory provider. The Hermes Agent-side patch is still needed until upstream command discovery loads the active memory provider and the memory-provider collector delegates command/skill registration.
+
+Release/tagging note for agents: `v0.3.1` is a documentation release that clarifies Hermes Agent `v0.14.0` compatibility instructions. It does not require users on Hermes Agent `v0.13.x` to change plugin runtime behavior, and it should not be interpreted as a Basic Memory data/schema migration.
+
 ## Problem
 
 `hermes-basic-memory` is an **exclusive memory-provider plugin**. Hermes loads exclusive memory providers through `plugins.memory`, not through the normal `PluginManager` discovery path.

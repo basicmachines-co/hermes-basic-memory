@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-05-16
+
+### Changed
+- **Documented the Hermes Agent v0.14.0-compatible `/bm-*` slash-command monkeypatch.** `MONKEYPATCH.md` now distinguishes the plugin's runtime version from the Hermes Agent-side compatibility patch: plugin `v0.3.0` remains the correct runtime release for Hermes Agent `v0.13.x`, while Hermes Agent `v0.14.0` still needs the updated two-part core patch so gateway startup command discovery loads the active exclusive memory provider and the memory-provider collector delegates `register_command` / `register_skill`.
+- **Clarified install guidance for users and agents.** The README known-issue section now points Hermes `v0.13.x` and `v0.14.0` users at the compatibility matrix in `MONKEYPATCH.md`, so agents do not mistake a plugin update for the required Hermes Agent core patch.
+
+### Notes
+- This is a documentation/compatibility-instructions release only. It does not change the plugin runtime code or Basic Memory data behavior. The plugin remains backward-compatible with Hermes Agent `v0.13.x`; the new documentation explains how to patch Hermes Agent `v0.14.0` until the upstream Hermes fix ships.
+
 ## [0.3.0] — 2026-05-12
 
 ### Added
@@ -105,6 +114,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Single-file plugin at `__init__.py`, AGPL-3.0-or-later.
 - 84-test pytest suite.
 
+[0.3.1]: https://github.com/basicmachines-co/hermes-basic-memory/releases/tag/v0.3.1
+[0.3.0]: https://github.com/basicmachines-co/hermes-basic-memory/releases/tag/v0.3.0
+[0.2.0]: https://github.com/basicmachines-co/hermes-basic-memory/releases/tag/v0.2.0
 [0.1.7]: https://github.com/basicmachines-co/hermes-basic-memory/releases/tag/v0.1.7
 [0.1.6]: https://github.com/basicmachines-co/hermes-basic-memory/releases/tag/v0.1.6
 [0.1.5]: https://github.com/basicmachines-co/hermes-basic-memory/releases/tag/v0.1.5
