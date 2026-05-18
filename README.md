@@ -4,7 +4,7 @@
 
 Hermes Memory Provider plugin that gives [Hermes Agent](https://github.com/NousResearch/hermes-agent) a persistent knowledge graph backed by [Basic Memory](https://github.com/basicmachines-co/basic-memory).
 
-The plugin replaces Hermes's "no external memory provider" with a real graph: search-before-answer recall, per-turn capture, end-of-session summaries, and seven `bm_*` tools the agent can call directly. Local mode by default; one CLI flip switches to true cloud routing through Basic Memory Cloud.
+The plugin replaces Hermes's "no external memory provider" with a real graph: search-before-answer recall, per-turn capture, end-of-session summaries, and ten `bm_*` tools the agent can call directly. Local mode by default; one CLI flip switches to true cloud routing through Basic Memory Cloud.
 
 ## Install
 
@@ -47,7 +47,7 @@ Expected:
 
 ## What the agent gets
 
-Eight tools (curated subset of Basic Memory's MCP surface):
+Ten tools (curated subset of Basic Memory's MCP surface):
 
 | Tool | Use |
 |---|---|
@@ -59,6 +59,10 @@ Eight tools (curated subset of Basic Memory's MCP surface):
 | `bm_delete` | Delete a note |
 | `bm_move` | Move a note to a different folder |
 | `bm_recent` | List notes updated recently (default `7d`; accepts natural-language timeframes) |
+| `bm_projects` | List available projects with their UUIDs (for cross-project routing) |
+| `bm_workspaces` | List Basic Memory Cloud workspaces |
+
+Every read/write tool also accepts optional `project` / `project_id` for per-call routing — write or read against a project other than the configured one without reconfiguring the plugin.
 
 Plus automatic capture:
 - **Per turn**: every user/assistant exchange appends to a running session-transcript note
