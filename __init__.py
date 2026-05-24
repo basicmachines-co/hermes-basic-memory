@@ -38,7 +38,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from agent.memory_provider import MemoryProvider
 from tools.registry import tool_error
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 logger = logging.getLogger("hermes.memory.basic-memory")
 
