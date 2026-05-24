@@ -640,6 +640,42 @@ class _BmMcpActor:
 # Argument translation: Hermes-side tool args → BM MCP tool args
 # ---------------------------------------------------------------------------
 
+_WORKSPACE_HASH_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*-[0-9a-f]{32}$")
+
+
+def _strip_memory_url_prefix(value: str) -> str:
+    if value.startswith("memory://"):
+        return value[len("memory://") :]
+    return value
+
+
+def _looks_workspace_qualified(value: str) -> bool:
+    """Return True for BM Cloud workspace-qualified identifiers.
+
+    Hermes normally injects its configured default project so calls operate on
+    the provider's project instead of Basic Memory's process default. But BM
+    Cloud routes fully-qualified identifiers itself; adding a default local
+    project makes `personal/main/...` resolve under that local project instead.
+    """
+    path = _strip_memory_url_prefix(value).strip("/")
+    parts = [part for part in path.split("/") if part]
+    if len(parts) < 3:
+        return False
+
+    workspace_slug = parts[0]
+    return workspace_slug == "personal" or bool(_WORKSPACE_HASH_SLUG_RE.match(workspace_slug))
+
+
+def _should_omit_default_project(hermes_tool: str, args: Dict[str, Any]) -> bool:
+    if hermes_tool in {"bm_read", "bm_edit", "bm_delete", "bm_move"}:
+        identifier = args.get("identifier")
+        return isinstance(identifier, str) and _looks_workspace_qualified(identifier)
+    if hermes_tool == "bm_context":
+        url = args.get("url")
+        return isinstance(url, str) and _looks_workspace_qualified(url)
+    return False
+
+
 def _translate_args(
     hermes_tool: str, args: Dict[str, Any], default_project: str
 ) -> Tuple[str, Dict[str, Any]]:
@@ -662,7 +698,7 @@ def _translate_args(
             out["project_id"] = str(project_id_override)
         elif project_name_override:
             out["project"] = str(project_name_override)
-        else:
+        elif not _should_omit_default_project(hermes_tool, args):
             out["project"] = default_project
 
     if hermes_tool == "bm_search":

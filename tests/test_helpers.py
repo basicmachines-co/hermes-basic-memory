@@ -174,6 +174,28 @@ def test_translate_read(bm):
     assert args == {"project": "proj", "identifier": "x/y"}
 
 
+def test_translate_read_workspace_qualified_identifier_self_routes(bm):
+    tool, args = bm._translate_args(
+        "bm_read",
+        {"identifier": "personal/main/scratch/note"},
+        "hermes-memory",
+    )
+    assert tool == "read_note"
+    assert args == {"identifier": "personal/main/scratch/note"}
+
+
+def test_translate_read_org_workspace_qualified_identifier_self_routes(bm):
+    tool, args = bm._translate_args(
+        "bm_read",
+        {"identifier": "basic-memory-7020de4e925843c68c9056c60d101d9e/main/scratch/note"},
+        "hermes-memory",
+    )
+    assert tool == "read_note"
+    assert args == {
+        "identifier": "basic-memory-7020de4e925843c68c9056c60d101d9e/main/scratch/note"
+    }
+
+
 def test_translate_write(bm):
     tool, args = bm._translate_args(
         "bm_write",
@@ -250,6 +272,32 @@ def test_translate_context(bm):
     )
     assert tool == "build_context"
     assert args == {"project": "proj", "url": "memory://x", "depth": 2}
+
+
+def test_translate_context_workspace_qualified_url_self_routes(bm):
+    tool, args = bm._translate_args(
+        "bm_context",
+        {"url": "memory://personal/main/scratch/note", "depth": 1},
+        "hermes-memory",
+    )
+    assert tool == "build_context"
+    assert args == {"url": "memory://personal/main/scratch/note", "depth": 1}
+
+
+def test_translate_context_org_workspace_qualified_url_self_routes(bm):
+    tool, args = bm._translate_args(
+        "bm_context",
+        {
+            "url": "memory://basic-memory-7020de4e925843c68c9056c60d101d9e/main/scratch/note",
+            "depth": 1,
+        },
+        "hermes-memory",
+    )
+    assert tool == "build_context"
+    assert args == {
+        "url": "memory://basic-memory-7020de4e925843c68c9056c60d101d9e/main/scratch/note",
+        "depth": 1,
+    }
 
 
 def test_translate_delete(bm):
