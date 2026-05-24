@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] — 2026-05-23
+
+### Fixed
+- **Let Basic Memory v0.21.3 self-route workspace-qualified identifiers and URLs.** Hermes no longer injects its configured default project into `bm_read`, `bm_edit`, `bm_delete`, `bm_move`, or `bm_context` calls when the identifier/URL is already workspace-qualified, such as `personal/main/...`, `memory://personal/main/...`, or an organization workspace slug with a 32-character hash suffix. This preserves Basic Memory Cloud's workspace-aware routing while keeping the existing default-project behavior for short/local identifiers.
+
 ## [0.3.1] — 2026-05-16
 
 ### Changed
@@ -114,6 +119,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Single-file plugin at `__init__.py`, AGPL-3.0-or-later.
 - 84-test pytest suite.
 
+[0.3.2]: https://github.com/basicmachines-co/hermes-basic-memory/releases/tag/v0.3.2
 [0.3.1]: https://github.com/basicmachines-co/hermes-basic-memory/releases/tag/v0.3.1
 [0.3.0]: https://github.com/basicmachines-co/hermes-basic-memory/releases/tag/v0.3.0
 [0.2.0]: https://github.com/basicmachines-co/hermes-basic-memory/releases/tag/v0.2.0
