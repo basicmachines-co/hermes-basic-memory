@@ -1,3 +1,20 @@
+<br/><br/><br/>
+# WE'VE MOVED
+
+This repo has been moved to a monorepo under basic-memory
+
+https://github.com/basicmachines-co/basic-memory/tree/main/integrations/hermes
+
+<br/>
+<br/>
+<br/>
+<br/>
+
+<br/>
+<br/>
+<br/>
+<br/>
+
 # hermes-basic-memory
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
